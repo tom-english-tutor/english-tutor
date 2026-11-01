@@ -1,6 +1,14 @@
 'use strict';
 const $=s=>document.querySelector(s),$$=s=>[...document.querySelectorAll(s)];
-const LS={get:(k,d)=>{try{const v=localStorage.getItem(k);return v==null?d:JSON.parse(v);}catch{return d;}},set:(k,v)=>localStorage.setItem(k,JSON.stringify(v))};
+/* ---------- profiles ---------- */
+const PROFILES={tom:{name:'Tom',ini:'T',lvl:'B1',g:'m'},chloe:{name:'Chloé',ini:'C',lvl:'?',g:'f'}};
+(()=>{if(localStorage.getItem('migratedV6'))return;['settings','sid','days','vocab','levels','cards','flow','demoSeeded'].forEach(k=>{const v=localStorage.getItem(k);if(v!=null&&localStorage.getItem('p:tom:'+k)==null)localStorage.setItem('p:tom:'+k,v);if(v!=null)localStorage.removeItem(k);});localStorage.setItem('migratedV6','1');})();
+const DEMO_P=(location.hash.match(/^#demo-\w+@(\w+)/)||[])[1];
+let PROF=DEMO_P||localStorage.getItem('profile');if(!PROFILES[PROF]||location.hash==='#demo-profiles')PROF=null;
+const ME=PROFILES[PROF]||PROFILES.tom;const NS='p:'+(PROF||'_')+':';
+const LS={get:(k,d)=>{try{const v=localStorage.getItem(NS+k);return v==null?d:JSON.parse(v);}catch{return d;}},set:(k,v)=>localStorage.setItem(NS+k,JSON.stringify(v))};
+function pickProfile(id){localStorage.setItem('profile',id);location.hash='';location.reload();}
+function switchProfile(){localStorage.removeItem('profile');location.hash='';location.reload();}
 const S=Object.assign({goal:15,accent:'us',speed:1,theme:matchMedia('(prefers-color-scheme: light)').matches?'light':'dark'},LS.get('settings',{}));
 const saveS=()=>LS.set('settings',S);
 const root=document.documentElement;root.dataset.theme=S.theme;
@@ -15,6 +23,7 @@ const dayRec=(d=today())=>days[d]||(days[d]={secs:0,words:0,errors:0,turns:0,uni
 const words=t=>(t.toLowerCase().match(/[a-z']+/g)||[]);
 function logSpeech(text,secs){const d=dayRec(),w=words(text);d.secs+=secs;d.words+=w.length;d.turns++;const u=new Set(d.uniq);w.forEach(x=>{u.add(x);vocab.add(x)});d.uniq=[...u].slice(0,3000);LS.set('days',days);LS.set('vocab',[...vocab].slice(-20000));refreshHome();}
 function logErrors(n){dayRec().errors+=n;LS.set('days',days);}
+function lastLevel(){return(levels[levels.length-1]||{}).l||ME.lvl;}
 function logLevel(l){if(!/^[ABC][12]$/.test(l||''))return;levels.push({d:today(),l});LS.set('levels',levels.slice(-500));}
 function streak(){const g=S.goal*60;let n=0,d=new Date();if((days[today(d)]||{}).secs>=g)n++;for(;;){d.setDate(d.getDate()-1);if((days[today(d)]||{}).secs>=g)n++;else break;}return n;}
 function lastDays(n){const out=[];const d=new Date();d.setDate(d.getDate()-n+1);for(let i=0;i<n;i++){out.push([today(d),days[today(d)]||{secs:0,words:0,errors:0,uniq:[]}]);d.setDate(d.getDate()+1);}return out;}
@@ -27,7 +36,7 @@ function schedule(card,q){ // q 0..5
  else{card.reps++;card.ivl=card.reps===1?1:card.reps===2?6:Math.round(card.ivl*card.ef);card.due=Date.now()+card.ivl*864e5;}
  card.ef=Math.max(1.3,card.ef+0.1-(5-q)*(0.08+(5-q)*0.02));saveC();}
 const dueCards=()=>cards.filter(c=>c.due<=Date.now()).sort((a,b)=>a.due-b.due);
-function ctx(extra){const due=dueCards().slice(0,6).map(c=>c.type==='fix'?`"${c.en}" (he used to say: "${c.wrong}")`:`expression "${c.en}" (${c.fr})`);
+function ctx(extra){extra=Object.assign({profile:PROF||'tom',level:lastLevel(),first:!Object.keys(days).length},extra||{});const due=dueCards().slice(0,6).map(c=>c.type==='fix'?`"${c.en}" (used to say: "${c.wrong}")`:`expression "${c.en}" (${c.fr})`);
  const recent=cards.slice(-10).map(c=>c.en);return Object.assign({accent:S.accent,due,recent},extra||{});}
 const b64=o=>btoa(unescape(encodeURIComponent(JSON.stringify(o))));
 
@@ -89,7 +98,7 @@ $$('.sheet').forEach(s=>s.addEventListener('click',e=>{if(e.target===s)s.classLi
 /* ---------- home ---------- */
 function refreshHome(){const d=days[today()]||{secs:0};const min=d.secs/60;$('#todayMin').textContent=Math.floor(min);$('#goalLbl').textContent=`/ ${S.goal} min aujourd'hui`;
  $('#ring').style.strokeDashoffset=628.3*(1-Math.min(1,min/S.goal));$('#streak').textContent=streak();$('#hDue').textContent=dueCards().length;
- $('#hWpm').textContent=d.secs>20?Math.round(d.words/(d.secs/60)):'–';$('#hLvl').textContent=(levels[levels.length-1]||{}).l||'B1';
+ $('#hWpm').textContent=d.secs>20?Math.round(d.words/(d.secs/60)):'–';$('#hLvl').textContent=lastLevel();
  const st=LS.get('flow',{})[today()]||0;['f1','f2','f3'].forEach((f,i)=>$('#'+f).classList.toggle('on',st>i));}
 function flowMark(n){const f=LS.get('flow',{});f[today()]=Math.max(f[today()]||0,n);LS.set('flow',f);}
 $('#startSession').onclick=()=>{unlock();session=true;if(dueCards().length){show('review');startReview(true);}else{flowMark(1);openChat(false);}};
@@ -150,7 +159,7 @@ async function sendTurn(rec,interrupted){setState('busy','Thinking');if(rec.blob
  }catch(e){if(pending.textContent==='…')pending.remove();bubble('Erreur : '+e.message,'err');setState('idle','Prêt');}}
 $('#newBtn').onclick=()=>openChat(mode.pressure,mode.scenario);
 $('#bilanBtn').onclick=async()=>{setState('busy','Bilan…');stopAudio();const d=days[today()]||{};
- try{const r=await fetch('/api/recap',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({sid,stats:{minutesToday:Math.round((d.secs||0)/60),wordsToday:d.words,errorsToday:d.errors,streak:streak()}})});const j=await r.json();if(!r.ok)throw new Error(j.error);
+ try{const r=await fetch('/api/recap',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({sid,ctx:{profile:PROF||'tom'},stats:{minutesToday:Math.round((d.secs||0)/60),wordsToday:d.words,errorsToday:d.errors,streak:streak()}})});const j=await r.json();if(!r.ok)throw new Error(j.error);
   const el=document.createElement('div');el.className='recap';el.innerHTML='<b>Bilan de session</b>';el.append(j.recap);log.appendChild(el);log.scrollTop=1e9;flowMark(3);}catch(e){bubble('Erreur : '+e.message,'err');}setState('idle','Prêt');};
 $('#pQuit').onclick=()=>{clearInterval(pTimerId);stopAudio();mode={pressure:false};$('#pBanner').hidden=true;show('home');};
 $$('#sh-pressure [data-sc]').forEach(b=>b.onclick=()=>{unlock();closeSheet('sh-pressure');openChat(true,b.dataset.sc);});
@@ -220,7 +229,7 @@ function renderStats(){const d14=lastDays(14);const min=d14.map(([,d])=>Math.rou
 function syncSettings(){$$('#setAccent button').forEach(b=>b.classList.toggle('on',b.dataset.a===S.accent));$$('#setTheme button').forEach(b=>b.classList.toggle('on',b.dataset.t===S.theme));
  $('#setSpeed').value=S.speed;$('#setSpeedV').textContent=(+S.speed).toFixed(2)+'×';$('#setGoal').value=S.goal;$('#setGoalV').textContent=S.goal+' min';root.dataset.theme=S.theme;}
 $('#setBtn').onclick=()=>{syncSettings();openSheet('sh-settings');};$('#setClose').onclick=()=>{closeSheet('sh-settings');refreshHome();};
-$$('#setAccent button').forEach(b=>b.onclick=e=>{e.preventDefault();S.accent=b.dataset.a;saveS();syncSettings();say({us:"Hey Tom! This is how I sound.",uk:"Hello Tom! Lovely to chat with you.",au:"G'day Tom! How's it going, mate?"}[S.accent]);});
+$$('#setAccent button').forEach(b=>b.onclick=e=>{e.preventDefault();S.accent=b.dataset.a;saveS();syncSettings();say({us:`Hey ${ME.name}! This is how I sound.`,uk:`Hello ${ME.name}! Lovely to chat with you.`,au:`G'day ${ME.name}! How's it going, mate?`}[S.accent]);});
 $$('#setTheme button').forEach(b=>b.onclick=e=>{e.preventDefault();S.theme=b.dataset.t;saveS();syncSettings();});
 $('#setSpeed').oninput=e=>{S.speed=+e.target.value;saveS();syncSettings();setRate(S.speed);};
 $('#setGoal').oninput=e=>{S.goal=+e.target.value;saveS();syncSettings();};
@@ -228,9 +237,12 @@ $('#icsBtn').onclick=e=>{e.preventDefault();const ics=['BEGIN:VCALENDAR','VERSIO
  const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([ics],{type:'text/calendar'}));a.download='english-coach.ics';a.click();};
 
 /* ---------- boot ---------- */
+$('#meBtn').textContent=ME.ini;$('#meBtn').className='av '+(PROF||'tom');$('#meBtn').onclick=switchProfile;
+$$('#profiles [data-p]').forEach(b=>b.onclick=()=>pickProfile(b.dataset.p));
+$('#profiles').hidden=!!PROF;
 syncSettings();refreshHome();hello();
-if(location.hash.startsWith('#demo')){document.head.insertAdjacentHTML('beforeend','<style>*{animation-duration:0s!important;animation-delay:0s!important;transition:none!important}</style>');
- const v=location.hash.slice(6)||'home';const t0=new Date();
+if(location.hash.startsWith('#demo')&&location.hash!=='#demo-profiles'){document.head.insertAdjacentHTML('beforeend','<style>*{animation-duration:0s!important;animation-delay:0s!important;transition:none!important}</style>');
+ const v=location.hash.slice(6).split('@')[0]||'home';const t0=new Date();
  if(!LS.get('demoSeeded')){for(let i=13;i>=0;i--){const d=new Date(t0);d.setDate(d.getDate()-i);if(i%5===3)continue;days[today(d)]={secs:(8+((i*7)%14))*60,words:(8+((i*7)%14))*60*1.6+i*20,errors:30-i,turns:12,uniq:['w'+i]};levels.push({d:today(d),l:i>8?'B1':'B1'});}
   levels.push({d:today(),l:'B2'});['I went to the beach yesterday.','We were very happy.','I agree with you.'].forEach((x,i)=>addCard({type:'fix',en:x,wrong:['I go to the beach yesterday','we was very happy','I am agree'][i],fr:['Je suis allé à la plage hier.','Nous étions très heureux.',"Je suis d'accord avec toi."][i]}));addCard({type:'expr',en:'it paid off',fr:'ça a payé',example:'All that hard work really paid off.'});
   cards.forEach(c=>c.due=Date.now()-1);saveC();for(let i=0;i<1500;i++)vocab.add('v'+i);days[today()].secs=11*60;LS.set('days',days);}
