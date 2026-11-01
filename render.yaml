@@ -1,0 +1,13 @@
+services:
+  - type: web
+    name: english-tutor
+    runtime: node
+    plan: free
+    buildCommand: "true"
+    startCommand: node server.js
+    healthCheckPath: /api/health
+    envVars:
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: CHAT_MODEL
+        value: claude-haiku-5-5

@@ -1,0 +1,49 @@
+<!doctype html><html lang="fr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes"><title>English Coach</title>
+<style>body{margin:0;font-family:-apple-system,system-ui,sans-serif;background:#0f172a;color:#e2e8f0;display:flex;flex-direction:column;height:100dvh}
+#log{flex:1;overflow-y:auto;padding:16px}.m{padding:10px 14px;border-radius:14px;margin:8px 0;max-width:85%;white-space:pre-wrap;line-height:1.4}
+.u{background:#2563eb;margin-left:auto}.a{background:#1e293b}.e{background:#7f1d1d}.live{background:#1d4ed8aa;margin-left:auto;font-style:italic}
+#bar{padding:16px 16px calc(16px + env(safe-area-inset-bottom));display:flex;flex-direction:column;align-items:center;gap:8px}
+#btn{width:150px;height:150px;border-radius:50%;border:none;font-size:20px;font-weight:700;color:#fff;background:#16a34a;-webkit-tap-highlight-color:transparent}
+#btn.rec{background:#dc2626;animation:p 1.2s infinite}#btn:disabled{background:#475569}@keyframes p{50%{transform:scale(1.06)}}
+#st{font-size:14px;opacity:.8}#reset{background:none;border:1px solid #475569;color:#94a3b8;border-radius:8px;padding:4px 10px}</style></head>
+<body><div id="log"><div class="m a">Hi Tom! Tap the big button, speak in English as long as you want, then tap again. I'll correct you and keep the conversation going. 🎙️</div></div>
+<div id="bar"><button id="btn">🎙️ Parler</button><div id="st">Prêt</div><button id="reset">Nouvelle conversation</button></div>
+<script>
+const $=s=>document.querySelector(s),btn=$('#btn'),st=$('#st'),log=$('#log');
+let sid=localStorage.sid||(localStorage.sid=Math.random().toString(36).slice(2));
+const SR=window.SpeechRecognition||window.webkitSpeechRecognition;
+let rec,recording=false,finalText='',interim='',liveEl=null,voice=null;
+function add(t,c){const d=document.createElement('div');d.className='m '+c;d.textContent=t;log.appendChild(d);log.scrollTop=1e9;return d;}
+if(!SR){add("Ton navigateur ne gère pas la reconnaissance vocale (ex. Firefox). Utilise Safari sur iPhone ou Chrome sur Android/ordinateur.",'e');btn.disabled=true;}
+else if(!window.isSecureContext){add("Le micro nécessite une adresse HTTPS.",'e');btn.disabled=true;}
+function pickVoice(){const v=speechSynthesis.getVoices();voice=v.find(x=>x.lang==='en-US'&&/Samantha|Google US|Natural|Premium|Enhanced/i.test(x.name))||v.find(x=>x.lang==='en-US')||v.find(x=>x.lang==='en-GB')||v.find(x=>/^en/.test(x.lang))||null;}
+if('speechSynthesis' in window){pickVoice();speechSynthesis.onvoiceschanged=pickVoice;}
+function speak(t){if(!('speechSynthesis' in window))return;speechSynthesis.cancel();const u=new SpeechSynthesisUtterance(t.replace(/Tip ?:.*$/is,''));u.lang=voice?voice.lang:'en-US';if(voice)u.voice=voice;u.rate=0.95;
+ u.onstart=()=>st.textContent='🔊 Le prof parle…';u.onend=()=>st.textContent='À toi !';speechSynthesis.speak(u);}
+function makeRec(){const r=new SR();r.lang='en-US';r.continuous=true;r.interimResults=true;
+ r.onresult=e=>{interim='';for(let i=e.resultIndex;i<e.results.length;i++){const t=e.results[i][0].transcript;if(e.results[i].isFinal)finalText+=t.trim()+' ';else interim+=t;}
+  liveEl.textContent=(finalText+interim).trim()||'…';log.scrollTop=1e9;};
+ r.onerror=e=>{if(e.error==='not-allowed'||e.error==='service-not-allowed'){recording=false;add("Accès au micro refusé. iPhone : Réglages › Safari › Micro › Autoriser (et Réglages › Confidentialité › Reconnaissance vocale). Android : cadenas 🔒 › Autorisations › Micro.",'e');stopUI();}
+  else if(e.error==='audio-capture'){recording=false;add("Aucun micro détecté.",'e');stopUI();}};
+ r.onend=()=>{if(recording){finalText+=interim?interim.trim()+' ':'';interim='';try{rec=makeRec();rec.start();}catch(_){}}};
+ return r;}
+function start(){
+ if('speechSynthesis' in window){speechSynthesis.cancel();const u=new SpeechSynthesisUtterance(' ');u.volume=0;speechSynthesis.speak(u);} // iOS unlock
+ finalText='';interim='';recording=true;liveEl=add('…','live');
+ rec=makeRec();try{rec.start();}catch(e){add('Erreur micro : '+e.message,'e');recording=false;return;}
+ btn.classList.add('rec');btn.textContent='⏹ Stop';st.textContent="Je t'écoute… (personne ne te coupe)";}
+function stopUI(){btn.classList.remove('rec');btn.textContent='🎙️ Parler';if(liveEl&&liveEl.textContent==='…'){liveEl.remove();liveEl=null;}}
+async function stop(){recording=false;try{rec.stop();}catch(_){}
+ btn.classList.remove('rec');btn.textContent='⏳';btn.disabled=true;st.textContent='Le prof réfléchit…';
+ await new Promise(r=>setTimeout(r,700)); // laisse arriver les derniers résultats
+ const text=(finalText+interim).trim();
+ if(!text){stopUI();btn.disabled=false;st.textContent="Je n'ai rien entendu, réessaie.";return;}
+ liveEl.className='m u';liveEl.textContent=text;
+ try{const r=await fetch('/api/chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({sid,text})});const j=await r.json();
+  if(!r.ok)throw new Error(j.error||r.status);add(j.reply,'a');speak(j.reply);}
+ catch(e){add('Erreur : '+e.message,'e');st.textContent='Prêt';}
+ btn.disabled=false;btn.textContent='🎙️ Parler';}
+btn.onclick=()=>recording?stop():start();
+$('#reset').onclick=async()=>{await fetch('/api/reset?sid='+sid,{method:'POST'});sid=localStorage.sid=Math.random().toString(36).slice(2);log.innerHTML='';add('New conversation! Tap and talk.','a');};
+</script></body></html>
