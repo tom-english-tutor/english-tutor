@@ -1,51 +1,81 @@
-<!doctype html><html lang="fr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-<meta name="apple-mobile-web-app-capable" content="yes"><title>English Coach</title>
-<style>body{margin:0;font-family:-apple-system,system-ui,sans-serif;background:#0f172a;color:#e2e8f0;display:flex;flex-direction:column;height:100dvh}
-#log{flex:1;overflow-y:auto;padding:16px}.m{padding:10px 14px;border-radius:14px;margin:8px 0;max-width:85%;white-space:pre-wrap;line-height:1.4}
-.u{background:#2563eb;margin-left:auto}.a{background:#1e293b}.e{background:#7f1d1d}.live{background:#1d4ed8aa;margin-left:auto;font-style:italic}
-#bar{padding:16px 16px calc(16px + env(safe-area-inset-bottom));display:flex;flex-direction:column;align-items:center;gap:8px}
-#btn{width:150px;height:150px;border-radius:50%;border:none;font-size:20px;font-weight:700;color:#fff;background:#16a34a;-webkit-tap-highlight-color:transparent}
-#btn.rec{background:#dc2626;animation:p 1.2s infinite}#btn:disabled{background:#475569}@keyframes p{50%{transform:scale(1.06)}}
-#st{font-size:14px;opacity:.8}#reset{background:none;border:1px solid #475569;color:#94a3b8;border-radius:8px;padding:4px 10px}</style></head>
-<body><div id="log"><div class="m a">Hi Tom! Tap the big button, speak in English as long as you want, then tap again. I'll correct you and keep the conversation going. 🎙️</div></div>
-<div id="bar"><button id="btn">🎙️ Parler</button><div id="st">Prêt</div><button id="reset">Nouvelle conversation</button></div>
+<!doctype html><html lang="fr"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no">
+<meta name="apple-mobile-web-app-capable" content="yes"><meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"><meta name="apple-mobile-web-app-title" content="Coach">
+<meta name="theme-color" content="#000000" media="(prefers-color-scheme: dark)"><meta name="theme-color" content="#f5f5f7" media="(prefers-color-scheme: light)">
+<link rel="manifest" href="/manifest.webmanifest"><link rel="apple-touch-icon" href="/apple-touch-icon.png"><link rel="icon" href="/icon.svg">
+<title>English Coach</title>
+<style>
+:root{--bg:#000;--fg:#f5f5f7;--mute:#86868b;--bubble:#1c1c1e;--me:#0a84ff;--card:rgba(255,214,10,.08);--cardb:rgba(255,214,10,.25);--line:rgba(255,255,255,.08);--accent:#0a84ff;--rec:#ff375f}
+[data-theme=light]{--bg:#f5f5f7;--fg:#1d1d1f;--mute:#6e6e73;--bubble:#fff;--me:#0071e3;--card:#fffbea;--cardb:#f2dc8c;--line:rgba(0,0,0,.08);--accent:#0071e3}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{margin:0;height:100%;background:var(--bg);color:var(--fg);font:17px/1.45 -apple-system,BlinkMacSystemFont,"SF Pro Text","Inter",system-ui,sans-serif;-webkit-font-smoothing:antialiased;transition:background .4s,color .4s}
+body{display:flex;flex-direction:column;height:100dvh;max-width:720px;margin:0 auto}
+header{display:flex;align-items:center;justify-content:space-between;padding:calc(14px + env(safe-area-inset-top)) 22px 10px}
+h1{font:600 20px/1 -apple-system,"SF Pro Display","Inter",system-ui;letter-spacing:-.02em;margin:0}
+.ib{background:none;border:0;color:var(--mute);font-size:15px;padding:8px;border-radius:10px;cursor:pointer}.ib:active{opacity:.5}
+#log{flex:1;overflow-y:auto;padding:12px 22px 24px;scroll-behavior:smooth;-webkit-mask-image:linear-gradient(transparent,#000 18px)}
+.msg{max-width:82%;margin:10px 0;padding:12px 16px;border-radius:22px;animation:in .35s cubic-bezier(.2,.8,.2,1) both;white-space:pre-wrap}
+.ai{background:var(--bubble);border-bottom-left-radius:8px}.me{background:var(--me);color:#fff;margin-left:auto;border-bottom-right-radius:8px}
+.err{background:rgba(255,55,95,.12);color:var(--rec);font-size:15px}
+.tip{margin:8px 0 2px;max-width:82%;padding:10px 14px;border-radius:16px;background:var(--card);border:1px solid var(--cardb);font-size:15px;animation:in .45s .1s both}
+.tip b{font-weight:600;font-size:12px;letter-spacing:.06em;text-transform:uppercase;color:#d4a800;display:block;margin-bottom:2px}
+.hello{text-align:center;color:var(--mute);margin:16vh auto 0;max-width:300px;animation:in .6s both}.hello h2{color:var(--fg);font:600 28px/1.15 -apple-system,"SF Pro Display",Inter,system-ui;letter-spacing:-.03em;margin:0 0 10px}
+@keyframes in{from{opacity:0;transform:translateY(8px) scale(.98)}}
+footer{display:flex;flex-direction:column;align-items:center;padding:8px 0 calc(22px + env(safe-area-inset-bottom))}
+#state{height:20px;font-size:13px;letter-spacing:.04em;color:var(--mute);margin-bottom:14px;transition:opacity .3s}
+.wrap{position:relative;width:132px;height:132px;display:grid;place-items:center}
+#wave{position:absolute;inset:-34px;width:200px;height:200px;pointer-events:none}
+#mic{position:relative;width:96px;height:96px;border-radius:50%;border:0;cursor:pointer;color:#fff;background:radial-gradient(circle at 50% 35%,#4aa3ff,var(--accent));box-shadow:0 10px 30px rgba(10,132,255,.35),inset 0 1px 0 rgba(255,255,255,.3);transition:transform .25s cubic-bezier(.2,.8,.2,1),background .3s,box-shadow .3s}
+#mic:active{transform:scale(.94)}#mic svg{width:34px;height:34px}
+#mic.rec{background:radial-gradient(circle at 50% 35%,#ff6b8a,var(--rec));box-shadow:0 0 0 0 rgba(255,55,95,.5),0 10px 40px rgba(255,55,95,.45);animation:glow 1.8s ease-in-out infinite}
+#mic.busy{background:radial-gradient(circle at 50% 35%,#5a5a60,#3a3a3c);box-shadow:none}
+#mic.busy::after{content:"";position:absolute;inset:-6px;border-radius:50%;border:2px solid transparent;border-top-color:var(--accent);animation:spin 1s linear infinite}
+@keyframes glow{50%{box-shadow:0 0 0 18px rgba(255,55,95,0),0 10px 50px rgba(255,55,95,.6)}}@keyframes spin{to{transform:rotate(360deg)}}
+.hint{font-size:12px;color:var(--mute);margin-top:12px;opacity:.7}
+</style></head><body>
+<header><h1>English Coach</h1><div><button class="ib" id="theme" aria-label="Thème">◐</button><button class="ib" id="reset">Nouveau</button></div></header>
+<main id="log"><div class="hello"><h2>Let's talk.</h2>Appuie, parle anglais aussi longtemps que tu veux, puis appuie à nouveau. Personne ne te coupe.</div></main>
+<footer><div id="state">Prêt</div>
+<div class="wrap"><canvas id="wave" width="400" height="400"></canvas>
+<button id="mic" aria-label="Parler"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="9" y="3" width="6" height="11" rx="3" fill="currentColor"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg></button></div>
+<div class="hint">Tap to speak · tap to send</div></footer>
 <script>
-const $=s=>document.querySelector(s),btn=$('#btn'),st=$('#st'),log=$('#log');
+const $=s=>document.querySelector(s),mic=$('#mic'),state=$('#state'),log=$('#log'),cv=$('#wave'),cx=cv.getContext('2d');
+const root=document.documentElement;root.dataset.theme=localStorage.theme||(matchMedia('(prefers-color-scheme: light)').matches?'light':'dark');
+$('#theme').onclick=()=>{root.dataset.theme=localStorage.theme=root.dataset.theme==='dark'?'light':'dark'};
 let sid=localStorage.sid||(localStorage.sid=Math.random().toString(36).slice(2));
-const SR=window.SpeechRecognition||window.webkitSpeechRecognition;
-const player=new Audio();player.playsInline=true;player.setAttribute('playsinline','');player.onplay=()=>st.textContent='🔊 Le prof parle…';player.onended=()=>st.textContent='À toi !';
-let rec,recording=false,finalText='',interim='',liveEl=null,voice=null;
-function add(t,c){const d=document.createElement('div');d.className='m '+c;d.textContent=t;log.appendChild(d);log.scrollTop=1e9;return d;}
-if(!SR){add("Ton navigateur ne gère pas la reconnaissance vocale (ex. Firefox). Utilise Safari sur iPhone ou Chrome sur Android/ordinateur.",'e');btn.disabled=true;}
-else if(!window.isSecureContext){add("Le micro nécessite une adresse HTTPS.",'e');btn.disabled=true;}
-function pickVoice(){const v=speechSynthesis.getVoices();voice=v.find(x=>x.lang==='en-US'&&/Samantha|Google US|Natural|Premium|Enhanced/i.test(x.name))||v.find(x=>x.lang==='en-US')||v.find(x=>x.lang==='en-GB')||v.find(x=>/^en/.test(x.lang))||null;}
-if('speechSynthesis' in window){pickVoice();speechSynthesis.onvoiceschanged=pickVoice;}
-function speak(t){if(!('speechSynthesis' in window))return;speechSynthesis.cancel();const u=new SpeechSynthesisUtterance(t.split('\n').map(l=>l.replace(/Tip\s*:.*$/i,'')).join(' '));u.lang=voice?voice.lang:'en-US';if(voice)u.voice=voice;u.rate=0.95;
- u.onstart=()=>st.textContent='🔊 Le prof parle…';u.onend=()=>st.textContent='À toi !';speechSynthesis.speak(u);}
-function makeRec(){const r=new SR();r.lang='en-US';r.continuous=true;r.interimResults=true;
- r.onresult=e=>{interim='';for(let i=e.resultIndex;i<e.results.length;i++){const t=e.results[i][0].transcript;if(e.results[i].isFinal)finalText+=t.trim()+' ';else interim+=t;}
-  liveEl.textContent=(finalText+interim).trim()||'…';log.scrollTop=1e9;};
- r.onerror=e=>{if(e.error==='not-allowed'||e.error==='service-not-allowed'){recording=false;add("Accès au micro refusé. iPhone : Réglages › Safari › Micro › Autoriser (et Réglages › Confidentialité › Reconnaissance vocale). Android : cadenas 🔒 › Autorisations › Micro.",'e');stopUI();}
-  else if(e.error==='audio-capture'){recording=false;add("Aucun micro détecté.",'e');stopUI();}};
- r.onend=()=>{if(recording){finalText+=interim?interim.trim()+' ':'';interim='';try{rec=makeRec();rec.start();}catch(_){}}};
- return r;}
-function start(){
- player.pause();if(!player.dataset.u){player.src='data:audio/mpeg;base64,SUQzBAAAAAAAI1RTU0UAAAAPAAADTGF2ZjU4Ljc2LjEwMAAAAAAAAAAAAAAA//tQAAAAAAAAAAAAAAAAAAAAAAAASW5mbwAAAA8AAAACAAABIADAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDA';player.play().catch(()=>{});player.dataset.u=1;}
- if('speechSynthesis' in window){speechSynthesis.cancel();const u=new SpeechSynthesisUtterance(' ');u.volume=0;speechSynthesis.speak(u);} // iOS unlock
- finalText='';interim='';recording=true;liveEl=add('…','live');
- rec=makeRec();try{rec.start();}catch(e){add('Erreur micro : '+e.message,'e');recording=false;return;}
- btn.classList.add('rec');btn.textContent='⏹ Stop';st.textContent="Je t'écoute… (personne ne te coupe)";}
-function stopUI(){btn.classList.remove('rec');btn.textContent='🎙️ Parler';if(liveEl&&liveEl.textContent==='…'){liveEl.remove();liveEl=null;}}
-async function stop(){recording=false;try{rec.stop();}catch(_){}
- btn.classList.remove('rec');btn.textContent='⏳';btn.disabled=true;st.textContent='Le prof réfléchit…';
- await new Promise(r=>setTimeout(r,700)); // laisse arriver les derniers résultats
- const text=(finalText+interim).trim();
- if(!text){stopUI();btn.disabled=false;st.textContent="Je n'ai rien entendu, réessaie.";return;}
- liveEl.className='m u';liveEl.textContent=text;
- try{const r=await fetch('/api/chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({sid,text})});const j=await r.json();
-  if(!r.ok)throw new Error(j.error||r.status);add(j.reply,'a');if(j.audio){player.src='data:audio/mpeg;base64,'+j.audio;player.play().catch(()=>speak(j.reply));}else speak(j.reply);}
- catch(e){add('Erreur : '+e.message,'e');st.textContent='Prêt';}
- btn.disabled=false;btn.textContent='🎙️ Parler';}
-btn.onclick=()=>recording?stop():start();
-$('#reset').onclick=async()=>{await fetch('/api/reset?sid='+sid,{method:'POST'});sid=localStorage.sid=Math.random().toString(36).slice(2);log.innerHTML='';add('New conversation! Tap and talk.','a');};
+let stream,rec,chunks=[],ac,an,raf,mode='idle';const player=new Audio();player.playsInline=true;player.setAttribute('playsinline','');
+const SILENT='data:audio/mpeg;base64,SUQzBAAAAAAAI1RTU0UAAAAPAAADTGF2ZjU4Ljc2LjEwMAAAAAAAAAAAAAAA//tQAAAAAAAAAAAAAAAAAAAAAAAASW5mbwAAAA8AAAACAAABIADAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDA';
+function setState(m,t){mode=m;state.textContent=t;mic.className=m==='rec'?'rec':m==='busy'?'busy':'';}
+function clearHello(){const h=$('.hello');if(h)h.remove();}
+function bubble(t,c){clearHello();const d=document.createElement('div');d.className='msg '+c;d.textContent=t;log.appendChild(d);log.scrollTop=1e9;return d;}
+function aiReply(t){clearHello();const tips=[],main=t.split('\n').filter(l=>{const m=l.match(/^\s*Tip\s*:\s*(.*)/i);if(m){tips.push(m[1]);return false}return true}).join('\n').replace(/\n{2,}/g,'\n\n').trim();
+ bubble(main,'ai');tips.forEach(x=>{const d=document.createElement('div');d.className='tip';d.innerHTML='<b>Tip</b>';d.append(x);log.appendChild(d);});log.scrollTop=1e9;}
+function fallbackSpeak(t){if(!('speechSynthesis'in window))return setState('idle','À toi');const u=new SpeechSynthesisUtterance(t.split('\n').map(l=>l.replace(/Tip\s*:.*$/i,'')).join(' '));u.lang='en-US';u.onend=()=>setState('idle','À toi');speechSynthesis.speak(u);}
+player.onplay=()=>setState('speak','Speaking');player.onended=()=>{setState('idle','À toi');drawIdle()};
+function pickMime(){for(const m of['audio/mp4','audio/webm;codecs=opus','audio/webm','audio/aac','audio/ogg'])if(window.MediaRecorder&&MediaRecorder.isTypeSupported(m))return m;return'';}
+function draw(){const W=cv.width,H=cv.height,d=new Uint8Array(an.frequencyBinCount);an.getByteTimeDomainData(d);let s=0;for(const v of d){const x=(v-128)/128;s+=x*x}const lvl=Math.min(1,Math.sqrt(s/d.length)*4);
+ cx.clearRect(0,0,W,H);const N=64,R=118;for(let i=0;i<N;i++){const a=i/N*Math.PI*2,v=(d[(i*7)%d.length]-128)/128,len=6+Math.abs(v)*60*lvl+lvl*14;
+ cx.strokeStyle=`rgba(255,55,95,${.25+lvl*.6})`;cx.lineWidth=5;cx.lineCap='round';cx.beginPath();cx.moveTo(W/2+Math.cos(a)*R,H/2+Math.sin(a)*R);cx.lineTo(W/2+Math.cos(a)*(R+len),H/2+Math.sin(a)*(R+len));cx.stroke();}
+ raf=requestAnimationFrame(draw);}
+function drawIdle(){cancelAnimationFrame(raf);cx.clearRect(0,0,cv.width,cv.height);}
+async function start(){
+ if(!window.isSecureContext||!navigator.mediaDevices?.getUserMedia||!window.MediaRecorder)return bubble("Le micro nécessite HTTPS et un navigateur récent (Safari iOS 14.3+, Chrome).",'err');
+ player.pause();if(!player.dataset.u){player.src=SILENT;player.play().catch(()=>{});player.dataset.u=1;}
+ try{if(!stream||!stream.active)stream=await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:true,noiseSuppression:true,autoGainControl:true}});}
+ catch(e){return bubble(e.name==='NotAllowedError'?"Accès au micro refusé. iPhone : Réglages › Safari › Micro › Autoriser (ou « aA » › Réglages du site). Android : 🔒 › Autorisations › Micro.":e.name==='NotFoundError'?"Aucun micro détecté.":"Erreur micro : "+e.name,'err');}
+ ac=ac||new (window.AudioContext||window.webkitAudioContext)();await ac.resume();an=ac.createAnalyser();an.fftSize=1024;ac.createMediaStreamSource(stream).connect(an);
+ const mime=pickMime();rec=mime?new MediaRecorder(stream,{mimeType:mime}):new MediaRecorder(stream);chunks=[];
+ rec.ondataavailable=e=>e.data.size&&chunks.push(e.data);rec.onstop=send;rec.start(1000);setState('rec','Listening');draw();}
+async function send(){drawIdle();setState('busy','Thinking');const type=(rec.mimeType||'audio/mp4');const blob=new Blob(chunks,{type});
+ if(blob.size<1500){setState('idle',"Trop court — réessaie");return;}
+ const pending=bubble('…','me');
+ try{const r=await fetch('/api/talk?sid='+sid,{method:'POST',headers:{'Content-Type':type},body:blob});const j=await r.json();
+  if(j.user)pending.textContent=j.user;else pending.remove();if(!r.ok)throw new Error(j.error||r.status);aiReply(j.reply);
+  if(j.audio){player.src='data:audio/mpeg;base64,'+j.audio;player.play().catch(()=>fallbackSpeak(j.reply));}else fallbackSpeak(j.reply);}
+ catch(e){bubble('Erreur : '+e.message,'err');setState('idle','Prêt');}}
+mic.onclick=()=>{if(mode==='rec')rec.stop();else if(mode!=='busy')start();};
+$('#reset').onclick=async()=>{await fetch('/api/reset?sid='+sid,{method:'POST'});sid=localStorage.sid=Math.random().toString(36).slice(2);log.innerHTML='<div class="hello"><h2>New conversation.</h2>Tap and talk.</div>';};
+if(location.hash==='#demo'){bubble("Yesterday I go to the beach with my friends and we was very happy.",'me');aiReply("Oh nice, a beach day sounds lovely! You'd say \"Yesterday I went to the beach\" and \"we were very happy.\"\nTip : au passé, go devient went, et avec we on dit were.\nSo what did you guys do there? Swimming, or just chilling in the sun?");setState('rec','Listening');}
 </script></body></html>
