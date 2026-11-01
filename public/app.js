@@ -104,7 +104,7 @@ function setState(m,t,hot){stateEl.textContent=t;stateEl.classList.toggle('hot',
 function bubble(t,c){const h=$('.hello',log);if(h)h.remove();const d=document.createElement('div');d.className='msg '+c;d.textContent=t;log.appendChild(d);log.scrollTop=1e9;return d;}
 function hello(){log.innerHTML=`<div class="hello"><h2>${mode.pressure?'Ready?':"Let's talk."}</h2>${mode.pressure?'Le recruteur commence. Réponds avant la fin du chrono.':'Appuie, parle anglais aussi longtemps que tu veux, puis appuie à nouveau.'}</div>`;}
 function renderReply(text,meta){const h=$('.hello',log);if(h)h.remove();const tips=[];
- const main=text.split('\n').filter(l=>{const m=l.match(/^\s*Tip\s*:\s*(.*)/i);if(m){tips.push(m[1]);return false}return!/^\s*##/.test(l)}).join('\n').replace(/\n{2,}/g,'\n\n').trim();
+ const main=text.split('\n').filter(l=>{const m=l.match(/^\s*Tip\s*:\s*(.*)/i);if(m){if(!mode.pressure)tips.push(m[1]);return false}return!/^\s*##/.test(l)}).join('\n').replace(/\n{2,}/g,'\n\n').trim();
  bubble(main,'ai');const mk=(meta&&meta.mistakes)||[];
  mk.forEach((m,i)=>{if(!m||!m.right)return;const d=document.createElement('div');d.className='fix';
   d.innerHTML=`<div class="k">Correction</div>${m.wrong?`<div><s>${esc(m.wrong)}</s></div>`:''}<div class="right">${esc(m.right)}</div>${i===0&&tips[0]?`<div class="fr">${esc(tips[0])}</div>`:''}<button class="act">🔁 Répéter</button>`;
