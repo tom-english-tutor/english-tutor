@@ -16,3 +16,12 @@ Goal: make Tom (French, ~B1, entrepreneur, performance anxiety in interviews/mee
 **Bilan button:** an end-of-session recap in French: estimated level, strengths, top 5 mistakes (wrong → right), new expressions with examples, a goal for next time.
 
 **Latency design:** audio → `gpt-4o-transcribe` → Claude Haiku streamed (SSE, thinking disabled) → sentence chunker → `gpt-4o-mini-tts` per sentence, started in parallel and played in order. The first sentence plays while the rest is still being generated.
+
+## v5 features
+- **Shadowing (Répéter)**: every correction or expression card plays the model sentence (1× or 0.8×). Tom repeats it; the app transcribes, shows a word-level diff (green = right, red = missing, struck = extra), and adds per-word Azure pronunciation scores when that's configured.
+- **SRS**: each correction or expression becomes an SM-2 card in localStorage. Due cards are sent to Claude (`X-Ctx`) so it reuses them naturally. A 3-minute oral review gives a French prompt; Tom answers aloud; a fuzzy match ≥90% counts as perfect, otherwise Claude grades it 0–3; then the card is scheduled.
+- **Daily habit**: goal (default 15 min of speaking), streak (days where the goal is met), progress ring, session flow (Revision → Conversation → Bilan), and a daily reminder as an .ics calendar event (no web push).
+- **Progress**: minutes, words/min, errors per 100 words, vocabulary size and 7-day variety (type/token ratio), weekly CEFR median.
+- **Mode pression**: interview, client meeting or investor pitch. Answer timer (20–90 s) with auto cut-off sent to Claude, a 5 s "think" countdown, tough short questions and interruptions, no corrections until the debrief.
+- **Accent** US/UK/AU (voice + TTS instructions + spelling) and a speed slider (client playbackRate).
+- **Pronunciation**: `/api/pron` → Azure Speech REST short-audio Pronunciation Assessment. The browser encodes WAV 16 kHz mono client-side. Hidden unless `AZURE_SPEECH_KEY` and `AZURE_SPEECH_REGION` are set.
