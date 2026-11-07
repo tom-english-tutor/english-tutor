@@ -1,13 +1,13 @@
 # English Coach (Claude)
 
-Private spoken English practice. The phone records, OpenAI transcribes and speaks, Claude replies. Tom and Chloé each have their own cards, notes, and conversation on that device.
+Private spoken English practice. The phone records, OpenAI transcribes and speaks, Claude replies. Tom, Chloé, and Sophie each have their own cards, notes, and conversation on that device.
 
 Local: `ANTHROPIC_API_KEY=sk-ant-... OPENAI_API_KEY=sk-... node server.js` → http://localhost:8787  
 Tests: `npm test` (no API keys).
 
 ## What stays on the phone
 
-Conversations, learner notes, review cards, and settings are in `localStorage`, one namespace per profile (`p:tom:…`, `p:chloe:…`). Reloading or closing the browser restores the thread, and the next turn sends that thread to Claude so the reply continues it.
+Conversations, learner notes, review cards, and settings are in `localStorage`, one namespace per profile (`p:tom:…`, `p:chloe:…`, `p:sophie:…`). Reloading or closing the browser restores the thread, and the next turn sends that thread to Claude so the reply continues it. Sophie starts blank: nothing is copied from Tom or Chloé. The old v6 migration still moves only pre-profile keys onto Tom.
 
 This is the same browser on the same device. It is not an account and it does not sync to another phone. The Render service has no database; its memory is only a cache rebuilt from the phone on each turn, and the free disk is ephemeral. Nothing here copies existing cards or settings into a new store.
 
