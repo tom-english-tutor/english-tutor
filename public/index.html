@@ -2,7 +2,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no">
 <meta name="apple-mobile-web-app-capable" content="yes"><meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"><meta name="apple-mobile-web-app-title" content="Coach">
-<meta name="theme-color" content="#000000"><link rel="manifest" href="/manifest.webmanifest"><link rel="apple-touch-icon" href="/apple-touch-icon.png"><link rel="icon" href="/icon.svg">
+<meta name="theme-color" content="#000000"><link rel="manifest" href="/manifest.webmanifest"><link rel="apple-touch-icon" href="/apple-touch-icon.png"><link rel="icon" href="/favicon-32.png" sizes="32x32" type="image/png"><link rel="icon" href="/icon.svg" type="image/svg+xml">
 <title>English Coach</title><link rel="stylesheet" href="/style.css"></head><body>
 <header><div style="display:flex;align-items:center;gap:10px"><button id="meBtn" class="av tom" aria-label="Changer de profil">T</button><h1 id="title">English Coach</h1></div><div id="hbtns"><button class="ib" id="bilanBtn" hidden>Bilan</button><button class="ib" id="newBtn" hidden>Nouveau</button><button class="ib" id="setBtn" aria-label="Réglages">⚙︎</button></div></header>
 
@@ -20,12 +20,13 @@
  <button class="btn sec" id="pressureBtn">🎯 Mode pression</button>
  <h3>Aujourd'hui</h3>
  <div class="row"><div class="stat"><b id="hDue">0</b><span>cartes à revoir</span></div><div class="stat"><b id="hWpm">–</b><span>mots / min</span></div><div class="stat"><b id="hLvl">B1</b><span>niveau estimé</span></div></div>
+ <p class="fine" id="persistNote" style="text-align:center;margin-top:14px"></p>
 </div></section>
 
 <section class="view" id="v-chat">
  <div class="banner" id="pBanner" hidden><span><b>Mode pression</b> · <span id="pScen"></span></span><span class="timer" id="pTimer"></span><button class="ib" id="pQuit">Quitter</button></div>
  <main id="log"></main>
- <div class="dock"><div id="state">Prêt</div>
+ <div class="dock"><button type="button" class="lookup" id="lookupBtn" aria-pressed="false" title="Une seule recherche, au prochain message">Chercher</button><div id="state">Prêt</div>
   <div class="wrap"><canvas id="wave" width="600" height="600"></canvas><button class="mic" id="mic" aria-label="Parler"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="9" y="3" width="6" height="11" rx="3" fill="currentColor"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg></button></div></div>
 </section>
 
@@ -75,6 +76,10 @@
  <label class="set">Objectif quotidien <span><input type="range" id="setGoal" min="5" max="60" step="5"> <b id="setGoalV"></b></span></label>
  <label class="set">Thème <span class="seg" id="setTheme"><button data-t="dark">Sombre</button><button data-t="light">Clair</button></span></label>
  <label class="set">Rappel quotidien <button class="btn sec" style="width:auto;padding:8px 14px;font-size:14px" id="icsBtn">Ajouter au calendrier</button></label>
+ <label class="set">Conversation <button class="btn sec" type="button" style="width:auto;padding:8px 14px;font-size:14px" id="forgetChat">Effacer</button></label>
+ <label class="set">Notes du coach <button class="btn sec" type="button" style="width:auto;padding:8px 14px;font-size:14px" id="forgetNotes">Effacer</button></label>
+ <p class="fine" id="memInfo">L’historique et les notes restent sur cet appareil, séparés pour Tom et Chloé. Un autre téléphone ne les voit pas. Effacer la conversation garde les cartes et les réglages.</p>
+ <p class="fine" id="searchInfo"></p>
  <div style="color:var(--mute);font-size:13px;margin-top:12px" id="pronInfo"></div>
  <button class="btn sec" id="setClose" style="margin-top:16px">OK</button></div></div>
-<script src="/app.js"></script></body></html>
+<script src="/logic.js"></script><script src="/app.js"></script></body></html>
