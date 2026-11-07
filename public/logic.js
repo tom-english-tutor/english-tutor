@@ -18,18 +18,26 @@
     reference: 'On-demand lookup uses Wikipedia and DuckDuckGo Instant Answers only when you ask. It is not general web search (weather and news often have no result). ' + SEARCH_BLOCKER
   };
 
+  const PROFILE_IDS = ['tom', 'chloe', 'sophie'];
+  const DISCOVERY_IDS = ['chloe', 'sophie'];
+
   function profileId(id) {
-    return id === 'chloe' ? 'chloe' : 'tom';
+    return PROFILE_IDS.indexOf(id) >= 0 ? id : null;
   }
 
   function storageKey(profile, name) {
+    const id = profileId(profile);
     const n = String(name || '').replace(/[^a-z0-9_-]/gi, '').slice(0, 32);
-    return 'p:' + profileId(profile) + ':' + n;
+    if (!id || !n) return null;
+    return 'p:' + id + ':' + n;
   }
 
   function wipe(storage, profile, kind) {
     const name = kind === 'memory' || kind === 'notes' ? 'memory' : 'thread';
-    storage.removeItem(storageKey(profile, name));
+    const key = storageKey(profile, name);
+    if (!key) return false;
+    storage.removeItem(key);
+    return true;
   }
 
   function safeHttpUrl(url) {
@@ -174,7 +182,7 @@
     const n = priorCount || 0;
     if (c.mode === 'pressure') return 'pressure';
     if (c.resume && n > 0) return 'resume';
-    if (c.profile === 'chloe' && c.first && n === 0) return 'discover';
+    if (DISCOVERY_IDS.indexOf(c.profile) >= 0 && c.first && n === 0) return 'discover';
     return 'daily';
   }
 
@@ -250,7 +258,7 @@
   }
 
   return {
-    THREAD_CAP, MEMORY_CAP, SEARCH_BLOCKER, SEARCH_NOTE,
+    THREAD_CAP, MEMORY_CAP, SEARCH_BLOCKER, SEARCH_NOTE, PROFILE_IDS, DISCOVERY_IDS,
     profileId, storageKey, wipe, safeHttpUrl, cleanExcerpt, slimMeta,
     normalizeThread, appendMessage, toModelMessages, conversationForApi,
     normalizeMemory, mergeMemory, sessionAddendum, openingKind, openingText,

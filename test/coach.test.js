@@ -18,6 +18,80 @@ function memoryStorage() {
   };
 }
 
+test('sophie is a third profile and never shares storage with Tom or Chloé', () => {
+  assert.deepEqual(logic.PROFILE_IDS, ['tom', 'chloe', 'sophie']);
+  assert.equal(logic.profileId('sophie'), 'sophie');
+  assert.equal(logic.profileId('tom'), 'tom');
+  assert.equal(logic.profileId('chloe'), 'chloe');
+  assert.equal(logic.profileId('Sophie'), null);
+  assert.equal(logic.profileId(''), null);
+  assert.equal(logic.profileId(undefined), null);
+  assert.equal(logic.storageKey('sophie', 'thread'), 'p:sophie:thread');
+  assert.equal(logic.storageKey('tom', 'cards'), 'p:tom:cards');
+  assert.equal(logic.storageKey('nope', 'thread'), null);
+
+  const storage = memoryStorage();
+  storage.setItem('p:tom:thread', JSON.stringify([{ role: 'me', text: 'I publish Taïa' }]));
+  storage.setItem('p:tom:cards', JSON.stringify([{ id: 'fix:a', en: 'I went' }]));
+  storage.setItem('p:tom:settings', JSON.stringify({ goal: 20, accent: 'uk' }));
+  storage.setItem('p:tom:memory', JSON.stringify([{ text: 'Runs at dawn' }]));
+  storage.setItem('p:tom:days', JSON.stringify({ '2026-01-01': { secs: 60 } }));
+  storage.setItem('p:chloe:thread', JSON.stringify([{ role: 'me', text: 'I like drawing' }]));
+  storage.setItem('p:chloe:cards', JSON.stringify([{ id: 'expr:b', en: 'to sketch' }]));
+  storage.setItem('p:chloe:settings', JSON.stringify({ goal: 10 }));
+  storage.setItem('p:sophie:thread', JSON.stringify([{ role: 'me', text: 'I started English this week' }]));
+  storage.setItem('p:sophie:cards', JSON.stringify([{ id: 'fix:s', en: 'I have a cat' }]));
+  storage.setItem('p:sophie:settings', JSON.stringify({ goal: 15, accent: 'us' }));
+  storage.setItem('p:sophie:memory', JSON.stringify([{ text: 'Just started English' }]));
+  storage.setItem('p:sophie:days', JSON.stringify({ '2026-02-02': { secs: 30 } }));
+
+  assert.equal(logic.wipe(storage, 'sophie', 'thread'), true);
+  assert.equal(storage.getItem('p:sophie:thread'), null);
+  assert.match(storage.getItem('p:sophie:cards'), /cat/);
+  assert.match(storage.getItem('p:sophie:settings'), /us/);
+  assert.match(storage.getItem('p:sophie:memory'), /started/);
+  assert.match(storage.getItem('p:sophie:days'), /30/);
+  assert.match(storage.getItem('p:tom:thread'), /Taïa/);
+  assert.match(storage.getItem('p:tom:cards'), /I went/);
+  assert.match(storage.getItem('p:tom:settings'), /uk/);
+  assert.match(storage.getItem('p:chloe:thread'), /drawing/);
+  assert.match(storage.getItem('p:chloe:cards'), /sketch/);
+
+  assert.equal(logic.wipe(storage, 'not-a-profile', 'thread'), false);
+  assert.match(storage.getItem('p:tom:thread'), /Taïa/);
+  assert.equal(logic.wipe(storage, 'sophie', 'memory'), true);
+  assert.equal(storage.getItem('p:sophie:memory'), null);
+  assert.match(storage.getItem('p:sophie:cards'), /cat/);
+  assert.match(storage.getItem('p:tom:memory'), /dawn/);
+
+  const sophie = logic.toModelMessages([{ role: 'me', text: 'I started English this week' }, { role: 'ai', text: 'What made you start?' }]);
+  const next = logic.conversationForApi(sophie, 'I want to order coffee');
+  assert.match(next[0].content, /started English/);
+  assert.match(next[2].content, /coffee/);
+  assert.doesNotMatch(JSON.stringify(next), /Taïa|drawing/);
+  assert.equal(logic.openingKind({ profile: 'sophie', first: true }, 0), 'discover');
+  assert.equal(logic.openingKind({ profile: 'sophie', first: true, resume: true }, 2), 'resume');
+  assert.match(logic.openingText({ profile: 'sophie', first: true }, 0, 'Sophie'), /Sophie/);
+  assert.doesNotMatch(logic.openingText({ profile: 'sophie', first: true }, 0, 'Sophie'), /Taïa|Chloé|Béziers/);
+
+  const sys = sysFor({ profile: 'sophie', accent: 'us', memory: ['Just started English'], level: 'A2' });
+  assert.match(sys, /Sophie/);
+  assert.match(sys, /Just started English/);
+  assert.doesNotMatch(sys, /Taïa|Béziers|Chloé|\bhe\b/);
+  const unknown = sysFor({ profile: 'not-a-person', accent: 'us' });
+  assert.doesNotMatch(unknown, /Taïa|Béziers|Chloé|Sophie/);
+  assert.match(sysFor({ accent: 'us' }), /Taïa/);
+
+  const app = fs.readFileSync(path.join(root, 'public/app.js'), 'utf8');
+  const migration = app.slice(0, app.indexOf('const DEMO_P'));
+  assert.match(migration, /migratedV6/);
+  assert.match(migration, /p:tom:/);
+  assert.doesNotMatch(migration, /p:sophie:|p:chloe:/);
+  const html = fs.readFileSync(path.join(root, 'public/index.html'), 'utf8');
+  for (const id of logic.PROFILE_IDS) assert.match(html, new RegExp('data-p="' + id + '"'));
+  assert.match(html, /Sophie/);
+});
+
 test('tom and chloe storage stay separate, and reset keeps cards and settings', () => {
   const storage = memoryStorage();
   storage.setItem(logic.storageKey('tom', 'thread'), JSON.stringify([{ role: 'me', text: 'I publish Taïa' }]));
@@ -224,7 +298,8 @@ test('health and context routes keep two profiles apart and do not enable billed
   const port = app.address().port;
   try {
     const health = await (await fetch('http://127.0.0.1:' + port + '/api/health')).json();
-    assert.equal(health.version, 7);
+    assert.equal(health.version, 8);
+    assert.deepEqual(health.profiles, ['tom', 'chloe', 'sophie']);
     assert.equal(health.persistence, 'device-local');
     assert.equal(health.search, 'reference');
     assert.match(health.searchNote, /\$10 per 1,000 searches/);
@@ -257,8 +332,32 @@ test('health and context routes keep two profiles apart and do not enable billed
     assert.doesNotMatch(sysChloe, /\bhe\b/);
     assert.doesNotMatch(sysTom, /praise reuse/);
 
-    const reset = await fetch('http://127.0.0.1:' + port + '/api/reset?sid=sid-tom-test', { method: 'POST' });
+    const sophieRes = await fetch('http://127.0.0.1:' + port + '/api/context?sid=sid-sophie-test', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ profile: 'sophie', history: [{ role: 'me', text: 'I started English this week' }] })
+    });
+    assert.equal(sophieRes.status, 200);
+    const sophie = await sophieRes.json();
+    assert.equal(sophie.profile, 'sophie');
+    assert.match(sessions.get('sid-sophie-test')[0].content, /started English/);
+    assert.doesNotMatch(sessions.get('sid-tom-test')[0].content, /started English/);
+
+    const bad = await fetch('http://127.0.0.1:' + port + '/api/context?sid=sid-bad-test', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ profile: 'someone-else', history: [{ role: 'me', text: 'secret biography' }] })
+    });
+    assert.equal(bad.status, 400);
+    assert.equal(sessions.has('sid-bad-test'), false);
+    assert.match(sessions.get('sid-tom-test')[0].content, /Taïa/);
+
+    const reset = await fetch('http://127.0.0.1:' + port + '/api/reset?sid=sid-sophie-test', { method: 'POST' });
     assert.equal(reset.status, 200);
+    assert.equal(sessions.has('sid-sophie-test'), false);
+    assert.match(sessions.get('sid-tom-test')[0].content, /Taïa/);
+    assert.match(sessions.get('sid-chloe-test')[0].content, /Lyon/);
+
+    const resetTom = await fetch('http://127.0.0.1:' + port + '/api/reset?sid=sid-tom-test', { method: 'POST' });
+    assert.equal(resetTom.status, 200);
     assert.equal(sessions.has('sid-tom-test'), false);
     assert.match(sessions.get('sid-chloe-test')[0].content, /Lyon/);
   } finally {
@@ -266,6 +365,8 @@ test('health and context routes keep two profiles apart and do not enable billed
     else process.env.WEB_SEARCH = prev;
     sessions.delete('sid-tom-test');
     sessions.delete('sid-chloe-test');
+    sessions.delete('sid-sophie-test');
+    sessions.delete('sid-bad-test');
     await new Promise(resolve => app.close(resolve));
   }
 });
