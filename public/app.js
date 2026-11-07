@@ -12,7 +12,8 @@ function switchProfile(){localStorage.removeItem('profile');location.hash='';loc
 const S=Object.assign({goal:15,accent:'us',speed:1,theme:matchMedia('(prefers-color-scheme: light)').matches?'light':'dark'},LS.get('settings',{}));
 const saveS=()=>LS.set('settings',S);
 const root=document.documentElement;root.dataset.theme=S.theme;
-let health={};fetch('/api/health').then(r=>r.json()).then(j=>{health=j;$('#pronInfo').textContent=j.pron?'Score de prononciation (Azure) : activé ✓':'Score de prononciation : désactivé (clé Azure non configurée).';}).catch(()=>{});
+let health={};fetch('/api/health').then(r=>r.json()).then(j=>{health=j;$('#pronInfo').textContent=j.pron?'Score de prononciation (Azure) : activé ✓':'Score de prononciation : désactivé (clé Azure non configurée).';
+ const s=$('#searchInfo');if(s)s.textContent=j.search==='off'?'Recherche en ligne désactivée. Le coach ne prétendra pas avoir vérifié.':j.search==='anthropic'?'Recherche web activée seulement à la demande. Elle est facturée à part sur la clé Anthropic.':'Recherche à la demande : Wikipédia et réponses instantanées, seulement si tu le demandes. Pas une recherche web générale, et rien à chaque message.';}).catch(()=>{});
 let sid=LS.get('sid',null)||Math.random().toString(36).slice(2);LS.set('sid',sid);
 const today=(d=new Date())=>d.toLocaleDateString('sv-SE');
 const esc=t=>String(t).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
@@ -36,9 +37,19 @@ function schedule(card,q){ // q 0..5
  else{card.reps++;card.ivl=card.reps===1?1:card.reps===2?6:Math.round(card.ivl*card.ef);card.due=Date.now()+card.ivl*864e5;}
  card.ef=Math.max(1.3,card.ef+0.1-(5-q)*(0.08+(5-q)*0.02));saveC();}
 const dueCards=()=>cards.filter(c=>c.due<=Date.now()).sort((a,b)=>a.due-b.due);
-function ctx(extra){extra=Object.assign({profile:PROF||'tom',level:lastLevel(),first:!Object.keys(days).length},extra||{});const due=dueCards().slice(0,6).map(c=>c.type==='fix'?`"${c.en}" (used to say: "${c.wrong}")`:`expression "${c.en}" (${c.fr})`);
- const recent=cards.slice(-10).map(c=>c.en);return Object.assign({accent:S.accent,due,recent},extra||{});}
+let thread=CoachLogic.normalizeThread(LS.get('thread',[]));
+let memory=CoachLogic.normalizeMemory(LS.get('memory',[]));
+function saveThread(){try{LS.set('thread',thread.slice(-CoachLogic.THREAD_CAP));}catch(e){thread=thread.slice(-20);try{LS.set('thread',thread);}catch(err){}}}
+function saveMemory(){try{LS.set('memory',memory);}catch(e){}}
+function ctx(extra){const incoming=extra||{};const pressure=incoming.mode==='pressure';extra=Object.assign({profile:PROF||'tom',level:lastLevel(),first:!Object.keys(days).length&&!thread.length},incoming);const due=dueCards().slice(0,6).map(c=>c.type==='fix'?`"${c.en}" (used to say: "${c.wrong}")`:`expression "${c.en}" (${c.fr})`);
+ const recent=cards.slice(-10).map(c=>c.en);
+ const history=pressure?[]:CoachLogic.toModelMessages(thread).slice(-8).map(m=>({role:m.role,content:String(m.content).slice(0,240)}));
+ return Object.assign({accent:S.accent,due,recent,memory:memory.slice(-12).map(m=>m.text),history},extra);}
 const b64=o=>btoa(unescape(encodeURIComponent(JSON.stringify(o))));
+let lookupOnce=false;
+function syncLookup(){const b=$('#lookupBtn');if(!b)return;b.classList.toggle('on',lookupOnce);b.setAttribute('aria-pressed',lookupOnce?'true':'false');b.textContent=lookupOnce?'Chercher · oui':'Chercher';}
+function resumeKey(){return 'resumed:'+(PROF||'tom');}
+async function syncContext(){try{await fetch('/api/context?sid='+encodeURIComponent(sid),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({history:CoachLogic.toModelMessages(thread),profile:PROF||'tom'})});}catch(e){console.warn('context',e);}}
 
 /* ---------- audio out ---------- */
 const player=new Audio();player.playsInline=true;player.setAttribute('playsinline','');
@@ -99,10 +110,11 @@ $$('.sheet').forEach(s=>s.addEventListener('click',e=>{if(e.target===s)s.classLi
 function refreshHome(){const d=days[today()]||{secs:0};const min=d.secs/60;$('#todayMin').textContent=Math.floor(min);$('#goalLbl').textContent=`/ ${S.goal} min aujourd'hui`;
  $('#ring').style.strokeDashoffset=628.3*(1-Math.min(1,min/S.goal));$('#streak').textContent=streak();$('#hDue').textContent=dueCards().length;
  $('#hWpm').textContent=d.secs>20?Math.round(d.words/(d.secs/60)):'–';$('#hLvl').textContent=lastLevel();
- const st=LS.get('flow',{})[today()]||0;['f1','f2','f3'].forEach((f,i)=>$('#'+f).classList.toggle('on',st>i));}
+ const st=LS.get('flow',{})[today()]||0;['f1','f2','f3'].forEach((f,i)=>$('#'+f).classList.toggle('on',st>i));
+ const note=$('#persistNote');if(note)note.textContent=thread.length?('Conversation de '+ME.name+' enregistrée sur cet appareil ('+thread.length+' message'+(thread.length>1?'s':'')+').'):'Les conversations restent sur cet appareil. Tom et Chloé ne partagent rien.';}
 function flowMark(n){const f=LS.get('flow',{});f[today()]=Math.max(f[today()]||0,n);LS.set('flow',f);}
-$('#startSession').onclick=()=>{unlock();session=true;if(dueCards().length){show('review');startReview(true);}else{flowMark(1);openChat(false);}};
-$('#freeTalk').onclick=()=>{unlock();session=false;openChat(false);};
+$('#startSession').onclick=()=>{unlock();session=true;if(dueCards().length){show('review');startReview(true);}else{flowMark(1);openChat(false,null,{resume:true});}};
+$('#freeTalk').onclick=()=>{unlock();session=false;openChat(false,null,{resume:true});};
 $('#pressureBtn').onclick=()=>openSheet('sh-pressure');
 let session=false;
 
@@ -111,7 +123,15 @@ const log=$('#log'),micBtn=$('#mic'),stateEl=$('#state'),cv=$('#wave'),cx=cv.get
 let mainRec=null,mode={pressure:false},raf,pTimerId,ctxMenu;
 function setState(m,t,hot){stateEl.textContent=t;stateEl.classList.toggle('hot',!!hot);micBtn.className='mic'+(m==='rec'?' rec':m==='busy'?' busy':'');}
 function bubble(t,c){const h=$('.hello',log);if(h)h.remove();const d=document.createElement('div');d.className='msg '+c;d.textContent=t;log.appendChild(d);log.scrollTop=1e9;return d;}
-function hello(){log.innerHTML=`<div class="hello"><h2>${mode.pressure?'Ready?':"Let's talk."}</h2>${mode.pressure?'Le recruteur commence. Réponds avant la fin du chrono.':'Appuie, parle anglais aussi longtemps que tu veux, puis appuie à nouveau.'}</div>`;}
+function hello(){log.innerHTML=`<div class="hello"><h2>${mode.pressure?'Ready?':"Let's talk."}</h2>${mode.pressure?'Le recruteur commence. Réponds avant la fin du chrono.':'Appuie, parle anglais aussi longtemps que tu veux, puis appuie à nouveau. La conversation reste sur cet appareil.'}</div>`;}
+function paintSearch(info, sources, el){const node=el||document.createElement('div');const fresh=!!(info&&info.fresh);node.className='searchchip'+(fresh?'':' bad');
+ const list=(sources||(info&&info.sources)||[]).map(s=>({title:s.title,url:CoachLogic.safeHttpUrl(s.url)})).filter(s=>s.url);
+ if(info&&info.reason==='searching'){node.className='searchchip';node.textContent='Recherche…';}
+ else if(fresh&&list.length)node.innerHTML='Vérifié · '+list.map(s=>'<a href="'+esc(s.url)+'" target="_blank" rel="noopener noreferrer">'+esc(s.title||s.url)+'</a>').join(' · ');
+ else {const reason=info&&info.reason;node.textContent=reason==='disabled'?'Recherche désactivée — pas d’info fraîche':reason==='timeout'?'Recherche trop lente — pas d’info fraîche':'Pas trouvé en ligne — pas d’info fraîche';}
+ if(!el)log.appendChild(node);log.scrollTop=1e9;return node;}
+function renderThread(){log.innerHTML='';if(!thread.length){hello();return;}
+ for(const m of thread){if(m.role==='me')bubble(m.text,'me');else{if(m.search)paintSearch(m.search,m.sources);renderReply(m.text,m.meta||null);}}}
 function renderReply(text,meta){const h=$('.hello',log);if(h)h.remove();const tips=[];
  const main=text.split('\n').filter(l=>{const m=l.match(/^\s*Tip\s*:\s*(.*)/i);if(m){if(!mode.pressure)tips.push(m[1]);return false}return!/^\s*##/.test(l)}).join('\n').replace(/\n{2,}/g,'\n\n').trim();
  bubble(main,'ai');const mk=(meta&&meta.mistakes)||[];
@@ -123,19 +143,33 @@ function renderReply(text,meta){const h=$('.hello',log);if(h)h.remove();const ti
  log.scrollTop=1e9;}
 function absorbMeta(meta){if(!meta)return;(meta.mistakes||[]).forEach(m=>m&&m.right&&addCard({type:'fix',en:m.right,wrong:m.wrong||'',fr:m.fr||''}));
  (meta.expressions||[]).forEach(e=>e&&e.en&&addCard({type:'expr',en:e.en,fr:e.fr||'',example:e.example||''}));
+ if(Array.isArray(meta.notes)&&meta.notes.length){memory=CoachLogic.mergeMemory(memory,meta.notes);saveMemory();}
  if(!mode.pressure||true)logErrors((meta.mistakes||[]).length);logLevel(meta.level);}
 function draw(an){const W=cv.width,H=cv.height,d=new Uint8Array(an.frequencyBinCount);an.getByteTimeDomainData(d);let s=0;for(const v of d){const x=(v-128)/128;s+=x*x}const lvl=Math.min(1,Math.sqrt(s/d.length)*4);
  cx.clearRect(0,0,W,H);const N=72,R=W*0.33;for(let i=0;i<N;i++){const a=i/N*Math.PI*2,v=(d[(i*7)%d.length]-128)/128,len=6+Math.abs(v)*W*.12*lvl+lvl*20;
  cx.strokeStyle=`rgba(255,55,95,${.25+lvl*.6})`;cx.lineWidth=5;cx.lineCap='round';cx.beginPath();cx.moveTo(W/2+Math.cos(a)*R,H/2+Math.sin(a)*R);cx.lineTo(W/2+Math.cos(a)*(R+len),H/2+Math.sin(a)*(R+len));cx.stroke();}
  raf=requestAnimationFrame(()=>draw(an));}
 const drawIdle=()=>{cancelAnimationFrame(raf);cx.clearRect(0,0,cv.width,cv.height);};
-async function openChat(pressure,scenario){mode={pressure:!!pressure,scenario};$('#pBanner').hidden=!pressure;
- if(pressure)$('#pScen').textContent={interview:"Entretien d'embauche",meeting:'Réunion client',pitch:'Pitch investisseur'}[scenario];
- await fetch('/api/reset?sid='+sid,{method:'POST'}).catch(()=>{});sid=Math.random().toString(36).slice(2);LS.set('sid',sid);
- hello();show('chat');setState('busy','Thinking');
- try{const r=await fetch('/api/start',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({sid,ctx:ctx(mode.pressure?{mode:'pressure',scenario}:{})})});const j=await r.json();if(!r.ok)throw new Error(j.error);
-  renderReply(j.reply,j.meta);streamDone=true;onIdle=afterTeacher;q.push({text:j.reply,audio:j.audio});playNext();}
+async function beginGreeting(opts){opts=opts||{};setState('busy','Thinking');if(!mode.pressure)await syncContext();
+ try{const extra=mode.pressure?{mode:'pressure',scenario:mode.scenario}:{resume:!!opts.resume};
+  const r=await fetch('/api/start',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({sid,ctx:ctx(extra)})});const j=await r.json();if(!r.ok)throw new Error(j.error||'start');
+  renderReply(j.reply,j.meta);
+  if(!mode.pressure&&j.reply){thread=CoachLogic.appendMessage(thread,{role:'ai',text:j.reply,meta:CoachLogic.slimMeta(j.meta),at:Date.now()});saveThread();}
+  streamDone=true;onIdle=afterTeacher;q.push({text:j.reply,audio:j.audio});playNext();}
  catch(e){bubble('Erreur : '+e.message,'err');setState('idle','Prêt');}}
+function clearConversation(){thread=[];saveThread();try{sessionStorage.removeItem(resumeKey());}catch(e){}fetch('/api/reset?sid='+encodeURIComponent(sid),{method:'POST'}).catch(()=>{});hello();refreshHome();}
+async function openChat(pressure,scenario,opts){opts=opts||{};mode={pressure:!!pressure,scenario:scenario||''};
+ const lookup=$('#lookupBtn');if(lookup)lookup.hidden=!!pressure;
+ $('#pBanner').hidden=!pressure;
+ if(pressure)$('#pScen').textContent={interview:"Entretien d'embauche",meeting:'Réunion client',pitch:'Pitch investisseur'}[scenario]||'';
+ show('chat');
+ if(pressure){await fetch('/api/reset?sid='+encodeURIComponent(sid),{method:'POST'}).catch(()=>{});hello();await beginGreeting({resume:false});return;}
+ if(opts.fresh){thread=[];saveThread();try{sessionStorage.removeItem(resumeKey());}catch(e){}await fetch('/api/reset?sid='+encodeURIComponent(sid),{method:'POST'}).catch(()=>{});hello();await beginGreeting({resume:false});return;}
+ renderThread();
+ let resumed=false;try{resumed=!!sessionStorage.getItem(resumeKey());}catch(e){}
+ if(opts.resume&&thread.length&&!resumed){try{sessionStorage.setItem(resumeKey(),'1');}catch(e){}await beginGreeting({resume:true});}
+ else if(opts.resume&&!thread.length)await beginGreeting({resume:false});
+ else setState('idle',thread.length?'À toi':'Prêt');}
 function afterTeacher(){if(!mode.pressure)return setState('idle','À toi');
  let t=5;setState('idle',`À toi — ${t}`,true);clearInterval(pTimerId);pTimerId=setInterval(()=>{t--;if(mainRec)return clearInterval(pTimerId);if(t>0)setState('idle',`À toi — ${t}`,true);else{clearInterval(pTimerId);setState('idle','Réponds maintenant !',true);}},1000);}
 micBtn.onclick=async()=>{
@@ -145,23 +179,27 @@ micBtn.onclick=async()=>{
  setState('rec','Listening');draw(mainRec.an);
  if(mode.pressure){let t=+S.pSecs||45;$('#pTimer').textContent=t+'s';clearInterval(pTimerId);pTimerId=setInterval(()=>{t--;$('#pTimer').textContent=t+'s';if(t<=10)setState('rec',`Plus que ${t}s`,true);if(t<=0&&mainRec){mainRec.interrupted=true;micBtn.click();}},1000);}};
 async function sendTurn(rec,interrupted){setState('busy','Thinking');if(rec.blob.size<1500)return setState('idle','Trop court — réessaie');
- const pending=bubble('…','me');let live=null,acc='';stopAudio();streamDone=false;onIdle=afterTeacher;
- try{const r=await fetch('/api/stream?sid='+sid,{method:'POST',headers:{'Content-Type':rec.type,'X-Ctx':b64(ctx({secs:rec.secs,interrupted:!!interrupted,...(mode.pressure?{mode:'pressure',scenario:mode.scenario}:{})}))},body:rec.blob});
+ const doSearch=lookupOnce&&!mode.pressure;lookupOnce=false;syncLookup();
+ const pending=bubble('…','me');let live=null,acc='',searchEl=null,searchSaved=null;stopAudio();streamDone=false;onIdle=afterTeacher;
+ try{if(!mode.pressure)await syncContext();
+  const r=await fetch('/api/stream?sid='+encodeURIComponent(sid),{method:'POST',headers:{'Content-Type':rec.type,'X-Ctx':b64(ctx({secs:rec.secs,interrupted:!!interrupted,search:doSearch,...(mode.pressure?{mode:'pressure',scenario:mode.scenario}:{})}))},body:rec.blob});
   if(!r.ok||!r.body)throw new Error('HTTP '+r.status);const rd=r.body.getReader(),dec=new TextDecoder();let buf='';
   while(true){const{value,done}=await rd.read();if(done)break;buf+=dec.decode(value,{stream:true});let i;
    while((i=buf.indexOf('\n\n'))>=0){const l=buf.slice(0,i);buf=buf.slice(i+2);if(!l.startsWith('data: '))continue;const ev=JSON.parse(l.slice(6));
-    if(ev.type==='user'){if(ev.text){pending.textContent=ev.text+(interrupted?'  ⏱':'');logSpeech(ev.text,rec.secs);}else pending.remove();}
-    else if(ev.type==='delta'){acc+=ev.text;const v=acc.split('\n').filter(l=>!/^\s*(Tip\s*:|##)/i.test(l)).join('\n').trim();if(v){if(!live)live=bubble('','ai');live.textContent=v;log.scrollTop=1e9;}}
+    if(ev.type==='user'){if(ev.text){pending.textContent=ev.text+(interrupted?'  ⏱':'');logSpeech(ev.text,rec.secs);if(!mode.pressure){thread=CoachLogic.appendMessage(thread,{role:'me',text:ev.text,at:Date.now()});saveThread();}}else pending.remove();}
+    else if(ev.type==='search'){if(ev.state==='searching'){searchEl=paintSearch({reason:'searching'});setState('busy','Recherche…');}else{searchSaved={fresh:!!ev.fresh,reason:ev.reason||'',mode:ev.mode||'',sources:ev.sources||[]};if(searchEl)paintSearch(searchSaved,searchSaved.sources,searchEl);else searchEl=paintSearch(searchSaved);}}
+    else if(ev.type==='delta'){acc+=ev.text;const v=acc.split('\n').filter(x=>!/^\s*(Tip\s*:|##)/i.test(x)).join('\n').trim();if(v){if(!live)live=bubble('','ai');live.textContent=v;log.scrollTop=1e9;}}
     else if(ev.type==='audio'){q.push(ev);playNext();}
-    else if(ev.type==='reply'){if(live)live.remove();renderReply(ev.text,ev.meta);absorbMeta(ev.meta);}
+    else if(ev.type==='reply'){if(live)live.remove();renderReply(ev.text,ev.meta);absorbMeta(ev.meta);
+     if(!mode.pressure&&ev.text){const item={role:'ai',text:ev.text,meta:CoachLogic.slimMeta(ev.meta),at:Date.now()};if(searchSaved){item.search=searchSaved;if(searchSaved.sources)item.sources=searchSaved.sources;}thread=CoachLogic.appendMessage(thread,item);saveThread();refreshHome();}}
     else if(ev.type==='error')throw new Error(ev.error);
     else if(ev.type==='done'){streamDone=true;if(!playing&&!q.length){const f=onIdle;onIdle=null;f&&f();}}}}
- }catch(e){if(pending.textContent==='…')pending.remove();bubble('Erreur : '+e.message,'err');setState('idle','Prêt');}}
-$('#newBtn').onclick=()=>openChat(mode.pressure,mode.scenario);
+ }catch(e){if(pending.textContent==='…')pending.remove();if(searchEl&&!searchSaved)paintSearch({fresh:false,reason:'error'},null,searchEl);bubble('Erreur : '+e.message,'err');setState('idle','Prêt');}}
+$('#newBtn').onclick=()=>{if(!confirm('Effacer la conversation de '+ME.name+' et en commencer une nouvelle ? Les cartes de révision et les réglages restent.'))return;mode={pressure:false};$('#pBanner').hidden=true;const lookup=$('#lookupBtn');if(lookup)lookup.hidden=false;openChat(false,null,{fresh:true});};
 $('#bilanBtn').onclick=async()=>{setState('busy','Bilan…');stopAudio();const d=days[today()]||{};
- try{const r=await fetch('/api/recap',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({sid,ctx:{profile:PROF||'tom'},stats:{minutesToday:Math.round((d.secs||0)/60),wordsToday:d.words,errorsToday:d.errors,streak:streak()}})});const j=await r.json();if(!r.ok)throw new Error(j.error);
+ try{if(!mode.pressure)await syncContext();const r=await fetch('/api/recap',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({sid,ctx:{profile:PROF||'tom'},stats:{minutesToday:Math.round((d.secs||0)/60),wordsToday:d.words,errorsToday:d.errors,streak:streak()}})});const j=await r.json();if(!r.ok)throw new Error(j.error);
   const el=document.createElement('div');el.className='recap';el.innerHTML='<b>Bilan de session</b>';el.append(j.recap);log.appendChild(el);log.scrollTop=1e9;flowMark(3);}catch(e){bubble('Erreur : '+e.message,'err');}setState('idle','Prêt');};
-$('#pQuit').onclick=()=>{clearInterval(pTimerId);stopAudio();mode={pressure:false};$('#pBanner').hidden=true;show('home');};
+$('#pQuit').onclick=()=>{clearInterval(pTimerId);stopAudio();mode={pressure:false};$('#pBanner').hidden=true;const lookup=$('#lookupBtn');if(lookup)lookup.hidden=false;renderThread();show('home');};
 $$('#sh-pressure [data-sc]').forEach(b=>b.onclick=()=>{unlock();closeSheet('sh-pressure');openChat(true,b.dataset.sc);});
 const pS=$('#pSecs');pS.value=S.pSecs||45;$('#pSecsV').textContent=pS.value+' s';pS.oninput=()=>{S.pSecs=+pS.value;saveS();$('#pSecsV').textContent=pS.value+' s';};$('#pClose').onclick=()=>closeSheet('sh-pressure');
 
@@ -206,7 +244,7 @@ $('#rMic').onclick=async()=>{const m=$('#rMic');
   m.className='mic smallmic';return;}
  try{rv.rec=new Rec();await rv.rec.start();m.className='mic smallmic rec';$('#rState').textContent='Je t\'écoute… appuie pour valider';}catch(e){rv.rec=null;$('#rResult').innerHTML=`<p class="msg err">${esc(e.message)}</p>`;}};
 $('#rNext').onclick=()=>{rv.i++;if(rv.i>=rv.list.length||Date.now()>rv.end)finishReview();else showCard();};
-$('#rToChat').onclick=()=>{clearInterval(rv.timer);rv.active=false;flowMark(1);openChat(false);};
+$('#rToChat').onclick=()=>{clearInterval(rv.timer);rv.active=false;flowMark(1);openChat(false,null,{resume:true});};
 
 /* ---------- stats charts ---------- */
 function bars(svg,vals,color){const W=300,H=110,n=vals.length,mx=Math.max(1,...vals),bw=W/n;svg.setAttribute('viewBox',`0 0 ${W} ${H+4}`);
@@ -229,10 +267,13 @@ function renderStats(){const d14=lastDays(14);const min=d14.map(([,d])=>Math.rou
 function syncSettings(){$$('#setAccent button').forEach(b=>b.classList.toggle('on',b.dataset.a===S.accent));$$('#setTheme button').forEach(b=>b.classList.toggle('on',b.dataset.t===S.theme));
  $('#setSpeed').value=S.speed;$('#setSpeedV').textContent=(+S.speed).toFixed(2)+'×';$('#setGoal').value=S.goal;$('#setGoalV').textContent=S.goal+' min';root.dataset.theme=S.theme;}
 $('#setBtn').onclick=()=>{syncSettings();openSheet('sh-settings');};$('#setClose').onclick=()=>{closeSheet('sh-settings');refreshHome();};
-$$('#setAccent button').forEach(b=>b.onclick=e=>{e.preventDefault();S.accent=b.dataset.a;saveS();syncSettings();say({us:`Hey ${ME.name}! This is how I sound.`,uk:`Hello ${ME.name}! Lovely to chat with you.`,au:`G'day ${ME.name}! How's it going, mate?`}[S.accent]);});
+$$('#setAccent button').forEach(b=>b.onclick=e=>{e.preventDefault();S.accent=b.dataset.a;saveS();syncSettings();say({us:`Hey ${ME.name}. This is how I sound.`,uk:`Hello ${ME.name}. This is me.`,au:`Hey ${ME.name}. This is how I sound.`}[S.accent]);});
 $$('#setTheme button').forEach(b=>b.onclick=e=>{e.preventDefault();S.theme=b.dataset.t;saveS();syncSettings();});
 $('#setSpeed').oninput=e=>{S.speed=+e.target.value;saveS();syncSettings();setRate(S.speed);};
 $('#setGoal').oninput=e=>{S.goal=+e.target.value;saveS();syncSettings();};
+const forgetChat=$('#forgetChat');if(forgetChat)forgetChat.onclick=()=>{if(!confirm('Effacer la conversation de '+ME.name+' sur cet appareil ? Les cartes de révision et les réglages restent.'))return;clearConversation();closeSheet('sh-settings');};
+const forgetNotes=$('#forgetNotes');if(forgetNotes)forgetNotes.onclick=()=>{if(!confirm('Oublier les notes du coach sur '+ME.name+' ? La conversation, les cartes et les réglages restent.'))return;memory=[];saveMemory();};
+const lookupBtn=$('#lookupBtn');if(lookupBtn)lookupBtn.onclick=()=>{lookupOnce=!lookupOnce;syncLookup();};
 $('#icsBtn').onclick=e=>{e.preventDefault();const ics=['BEGIN:VCALENDAR','VERSION:2.0','PRODID:-//English Coach//FR','BEGIN:VEVENT','UID:english-coach-daily@coach','DTSTAMP:20260101T000000Z','DTSTART;TZID=Europe/Paris:20260101T190000','DURATION:PT15M','RRULE:FREQ=DAILY','SUMMARY:🎙️ English Coach — '+S.goal+' min','URL:'+location.origin,'BEGIN:VALARM','ACTION:DISPLAY','DESCRIPTION:English Coach','TRIGGER:PT0M','END:VALARM','END:VEVENT','END:VCALENDAR'].join('\r\n');
  const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([ics],{type:'text/calendar'}));a.download='english-coach.ics';a.click();};
 
@@ -240,14 +281,14 @@ $('#icsBtn').onclick=e=>{e.preventDefault();const ics=['BEGIN:VCALENDAR','VERSIO
 $('#meBtn').textContent=ME.ini;$('#meBtn').className='av '+(PROF||'tom');$('#meBtn').onclick=switchProfile;
 $$('#profiles [data-p]').forEach(b=>b.onclick=()=>pickProfile(b.dataset.p));
 $('#profiles').hidden=!!PROF;
-syncSettings();refreshHome();hello();
+syncSettings();syncLookup();refreshHome();renderThread();
 if(location.hash.startsWith('#demo')&&location.hash!=='#demo-profiles'){document.head.insertAdjacentHTML('beforeend','<style>*{animation-duration:0s!important;animation-delay:0s!important;transition:none!important}</style>');
  const v=location.hash.slice(6).split('@')[0]||'home';const t0=new Date();
  if(!LS.get('demoSeeded')){for(let i=13;i>=0;i--){const d=new Date(t0);d.setDate(d.getDate()-i);if(i%5===3)continue;days[today(d)]={secs:(8+((i*7)%14))*60,words:(8+((i*7)%14))*60*1.6+i*20,errors:30-i,turns:12,uniq:['w'+i]};levels.push({d:today(d),l:i>8?'B1':'B1'});}
   levels.push({d:today(),l:'B2'});['I went to the beach yesterday.','We were very happy.','I agree with you.'].forEach((x,i)=>addCard({type:'fix',en:x,wrong:['I go to the beach yesterday','we was very happy','I am agree'][i],fr:['Je suis allé à la plage hier.','Nous étions très heureux.',"Je suis d'accord avec toi."][i]}));addCard({type:'expr',en:'it paid off',fr:'ça a payé',example:'All that hard work really paid off.'});
   cards.forEach(c=>c.due=Date.now()-1);saveC();for(let i=0;i<1500;i++)vocab.add('v'+i);days[today()].secs=11*60;LS.set('days',days);}
  refreshHome();
- if(v==='chat'){show('chat');bubble("Yesterday I go to the beach with my friends and we was very happy.",'me');renderReply("Oh nice, a beach day with friends! You went to the beach yesterday, and you were very happy, right? So what did you guys get up to?\nTip : au passé, go devient went, et avec we on dit were.",{mistakes:[{wrong:'I go to the beach yesterday',right:'I went to the beach yesterday.',fr:'Je suis allé à la plage hier.'}],expressions:[{en:'to get up to',fr:'faire (quelque chose)',example:'What did you get up to this weekend?'}]});setState('rec','Listening');}
+ if(v==='chat'){show('chat');bubble("Yesterday I go to the beach with my friends and we was very happy.",'me');renderReply("You went yesterday, and you were happy. What did you actually do once you got there?\nTip : au passé, go devient went, et avec we on dit were.",{mistakes:[{wrong:'I go to the beach yesterday',right:'I went to the beach yesterday.',fr:'Je suis allé à la plage hier.'}],expressions:[{en:'to get up to',fr:'faire (quelque chose)',example:'What did you get up to this weekend?'}]});setState('rec','Listening');}
  if(v==='pressure'){mode={pressure:true,scenario:'interview'};$('#pBanner').hidden=false;$('#pScen').textContent="Entretien d'embauche";$('#pTimer').textContent='12s';show('chat');bubble("Thanks for coming in, Tom. Let's not waste time — why should we hire you over the other ten candidates?",'ai');bubble("Because I have built my own business and I know how to sell products online…",'me');bubble("Sorry, let me stop you there — give me one number. What did you actually achieve?",'ai');setState('rec','Plus que 12s',true);}
  if(v==='review'){show('review');rv.list=[...cards];rv.i=0;rv.end=Date.now()+142e3;showCard();tickReview();const d=diff('I went to the beach yesterday.','I go to the beach yesterday');$('#rResult').innerHTML=`<div style="margin-top:8px">${diffHtml(d)}</div><div style="margin-top:10px;font-weight:600;color:var(--warn)">Presque · Attention au passé : go → went.</div><div style="color:var(--mute);font-size:14px;margin-top:4px">Réponse : I went to the beach yesterday.</div>`;$('#rNext').hidden=false;}
  if(v==='shadow'){show('chat');$('#shTarget').textContent='I went to the beach yesterday.';const d=diff('I went to the beach yesterday.','I want to the beach yesterday');$('#shResult').innerHTML=`<div class="score" style="color:var(--warn)">83%</div><div style="text-align:center">${diffHtml(d)}</div><h3>Prononciation</h3><div>${[['I',95],['went',58],['to',90],['the',88],['beach',72],['yesterday',84]].map(([w,s])=>`<span class="w ${s>=80?'ok':s>=60?'mid':'miss'}">${w} <small>${s}</small></span>`).join(' ')}</div><p style="text-align:center">Presque ! Réécoute et réessaie.</p>`;openSheet('sh-shadow');}

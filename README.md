@@ -1,9 +1,36 @@
 # English Coach (Claude)
-Big button → speak English (browser speech recognition) → Claude corrects + asks a question → spoken back (speechSynthesis).
-Browsers: Safari iPhone, Chrome Android/desktop (not Firefox). Needs HTTPS.
-Local: `ANTHROPIC_API_KEY=sk-ant-... node server.js` → http://localhost:8787
-## Deploy on Render
-1. Push this folder to a GitHub repo.
-2. render.com → New → Blueprint → pick the repo (uses render.yaml).
-3. Paste ANTHROPIC_API_KEY (console.anthropic.com → API Keys) when asked. Deploy.
-4. Open https://english-tutor-xxxx.onrender.com on the phone. (Free plan sleeps after 15 min idle: first load ~30-50 s.)
+
+Private spoken English practice. The phone records, OpenAI transcribes and speaks, Claude replies. Tom and Chloé each have their own cards, notes, and conversation on that device.
+
+Local: `ANTHROPIC_API_KEY=sk-ant-... OPENAI_API_KEY=sk-... node server.js` → http://localhost:8787  
+Tests: `npm test` (no API keys).
+
+## What stays on the phone
+
+Conversations, learner notes, review cards, and settings are in `localStorage`, one namespace per profile (`p:tom:…`, `p:chloe:…`). Reloading or closing the browser restores the thread, and the next turn sends that thread to Claude so the reply continues it.
+
+This is the same browser on the same device. It is not an account and it does not sync to another phone. The Render service has no database; its memory is only a cache rebuilt from the phone on each turn, and the free disk is ephemeral. Nothing here copies existing cards or settings into a new store.
+
+"Nouveau", or Réglages → Conversation → Effacer, clears that profile's transcript only. Réglages → Notes du coach clears remembered facts. Cards, mistakes, streaks, and settings stay until you remove them yourself.
+
+## Tone
+
+The coach talks like a friend of the same age: short, specific, and willing to correct a real mistake in passing. It is instructed not to open with "Wow", "incredible", "awesome", "great response", and the rest of that list.
+
+## Lookup
+
+Nothing is searched on an ordinary turn. Tap **Chercher** (one next message) or ask to look something up / ask a fresh-fact question that is not about your own life ("What's the weather in Béziers?").
+
+Default (`WEB_SEARCH` unset) asks Wikipedia and DuckDuckGo Instant Answer, with a short timeout. The phone shows "Recherche…", then the real links, or a clear "pas d'info fraîche". The coach is told not to invent a current fact when the lookup failed. Only the short query is sent — not the transcript, the profile, or the notes. Page text is treated as untrusted data.
+
+That default is not general web search. Weather, news, and scores often come back empty, and the app says so.
+
+**Anthropic web search stays off.** It bills about $10 per 1,000 searches on the existing `ANTHROPIC_API_KEY`, and the organization has to enable the tool in the Claude Console. No new key is required, but it is a separate charge, so it is not turned on. Set `WEB_SEARCH=anthropic` only if that charge is accepted. `WEB_SEARCH=off` disables lookup entirely; chat still works.
+
+## Deploy
+
+Production (https://english-tutor-1tyl.onrender.com, service `srv-dbjiphajnfac7384d9m0`) auto-deploys **main** only. A branch or an open PR does not go live.
+
+After review, merge the PR into `main`. No new service, disk, database, or env var is required for the default behavior. Do not set `WEB_SEARCH=anthropic` unless the per-search charge is accepted. Existing `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, and optional Azure keys stay as they are.
+
+Free plan: the site sleeps after about 15 minutes idle; the first load can take half a minute. Chat history still comes from the phone, not from the sleeping server.

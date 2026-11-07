@@ -1,5 +1,7 @@
-// English Coach v5 — Claude teaches, OpenAI listens & speaks, Azure (optional) scores pronunciation. Zero deps, Node 20+.
+// English Coach v7 — Claude talks, OpenAI listens & speaks, Azure (optional) scores pronunciation. Conversation history lives on the device. Zero deps, Node 20+.
 const http=require('http'),fs=require('fs'),path=require('path');
+const logic=require('./public/logic');
+const searchLib=require('./lib/search');
 const E=process.env,PORT=E.PORT||8787;
 const KEY=E.ANTHROPIC_API_KEY,MODEL=E.CHAT_MODEL||'claude-haiku-5-5',THINK=E.THINKING||'disabled';
 const OKEY=E.OPENAI_API_KEY,TTS_MODEL=E.TTS_MODEL||'gpt-4o-mini-tts',STT_MODEL=E.STT_MODEL||'gpt-4o-transcribe';
@@ -10,10 +12,7 @@ const ACCENTS={
  uk:{voice:E.VOICE_UK||'fable',accent:'a natural Southern British (London) accent',spelling:'British'},
  au:{voice:E.VOICE_AU||'sage',accent:'a natural, relaxed Australian accent',spelling:'Australian/British'}};
 const acc=a=>ACCENTS[a]||ACCENTS.us;
-const voiceInstr=a=>`Voice: a warm, relaxed native English speaker in their late twenties with ${acc(a).accent} — a friendly friend chatting, not a narrator or announcer.
-Tone: genuinely interested, light enthusiasm, smiling voice, encouraging.
-Pacing: natural and unhurried, small pauses between ideas; slightly slower on corrections so they're easy to catch.
-Intonation: natural rises and falls, real conversational melody; questions sound curious. Never flat, robotic or theatrical.`;
+const voiceInstr=a=>logic.voiceInstructions(acc(a).accent);
 const PRESSURE={
  interview:'a demanding hiring manager at a fast-growing international company interviewing {{NAME}} for a role that fits what you know about them',
  meeting:'a sceptical client in a tense meeting who is unhappy about delays and price, and pushes {{NAME}} for clear answers',
@@ -60,11 +59,8 @@ const prof=c=>PROFILES[(c&&c.profile)]||PROFILES.tom;
 function personal(t,c){const p=prof(c);t=t.split('{{PROFILE}}').join(p.profile).split('{{NAME}}').join(p.name).split('{{PITCH}}').join(p.pitch).split('{{GENDER_FR}}').join(p.g==='f'?'féminin : elle est une femme (ex. « tu es prête », « tu es allée »)':'masculin (ex. « tu es prêt », « tu es allé »)');
  if(p.g==='f')t=t.replace(/\bhe\b/g,'she').replace(/\bHe\b/g,'She').replace(/\bhim\b/g,'her').replace(/\bhis\b/g,'her').replace(/\bHis\b/g,'Her').replace(/\bhimself\b/g,'herself');return t;}
 function sysFor(ctx){
-  let x=SYS;const c=ctx||{};
-  x+=`\n\n# Session settings\nAccent/spelling: ${acc(c.accent).spelling} English — use its natural vocabulary and idioms.`;
-  const due=(c.due||[]).slice(0,6),recent=(c.recent||[]).slice(0,10);
-  if(due.length)x+=`\n\n# Spaced-repetition items DUE today — weave 1 of them naturally into this turn when it fits (create a situation where {{NAME}} needs it; don't quiz):\n- ${due.join('\n- ')}`;
-  if(recent.length)x+=`\n\n# Already taught recently (don't re-teach; praise reuse):\n- ${recent.join('\n- ')}`;
+  const c=ctx||{};
+  let x=SYS+logic.sessionAddendum(Object.assign({}, c, {spelling:acc(c.accent).spelling}));
   if(c.mode==='pressure'){
     x+=`\n\n# MODE PRESSION (performance-anxiety training) — ACTIVE
 You are now ${PRESSURE[c.scenario]||PRESSURE.interview}. Stay fully in character.
@@ -72,18 +68,31 @@ You are now ${PRESSURE[c.scenario]||PRESSURE.interview}. Stay fully in character
 - Keep each turn very short (1–2 sentences) and direct. Sometimes politely interrupt or redirect ("Sorry, let me stop you there —").
 - Do NOT correct mistakes and do NOT write any "Tip :" line during the role-play (only in the final debrief). Still log mistakes in the ## JSON.
 - If {{NAME}} ran out of time, react like a real interviewer would (move on, or ask him to get to the point).
-- After about 6 exchanges, or if {{NAME}} says "stop", step out of character: say it's over, give him 2 strengths and 2 things to improve, warmly.`;}
-  if(c.level)x+=`\n\n# Last estimated level from previous sessions: ${c.level}`;
+- After about 6 exchanges, or if {{NAME}} says "stop", step out of character: say it's over, give him 2 concrete strengths and 2 concrete fixes. No stock praise.`;}
   return personal(x,c);
 }
 async function* claudeStream(sid,text,ctx){
-  const h=sessions.get(sid)||[];h.push({role:'user',content:text});
-  const r=await claude({max_tokens:1024,system:sysFor(ctx),messages:h.slice(-30),stream:true});
-  if(!r.ok){h.pop();const j=await r.json().catch(()=>({}));throw Object.assign(new Error('Erreur Claude ('+r.status+') : '+(j.error&&j.error.message||'inconnue')),{code:502});}
+  const had=sessions.has(sid);
+  const h=had?sessions.get(sid):(ctx&&ctx.mode==='pressure'?[]:logic.toModelMessages(ctx&&ctx.history||[]));
+  const msgs=logic.conversationForApi(h,text);
+  sessions.set(sid,msgs);
+  const r=await claude({max_tokens:1024,system:sysFor(ctx),messages:msgs.slice(-30),stream:true});
+  if(!r.ok){if(had)sessions.set(sid,h);else sessions.delete(sid);const j=await r.json().catch(()=>({}));throw Object.assign(new Error('Erreur Claude ('+r.status+') : '+(j.error&&j.error.message||'inconnue')),{code:502});}
   let full='',buf='';const dec=new TextDecoder();
   for await(const c of r.body){buf+=dec.decode(c,{stream:true});let i;while((i=buf.indexOf('\n'))>=0){const l=buf.slice(0,i).trim();buf=buf.slice(i+1);
     if(!l.startsWith('data:'))continue;try{const ev=JSON.parse(l.slice(5));if(ev.type==='content_block_delta'&&ev.delta&&ev.delta.type==='text_delta'){full+=ev.delta.text;yield ev.delta.text;}}catch{}}}
-  h.push({role:'assistant',content:full});sessions.set(sid,h.slice(-40));
+  msgs.push({role:'assistant',content:full});sessions.set(sid,msgs.slice(-40));
+}
+async function anthropicLookup(query){
+  const spec=searchLib.anthropicToolBody(query);
+  const r=await claude(spec);
+  const j=await r.json().catch(()=>({}));
+  if(!r.ok) return {fresh:false, reason:'error', sources:[]};
+  return searchLib.parseAnthropicSearch(j);
+}
+function publicSearch(result){
+  const sources=(result&&result.sources||[]).map(s=>({title:s.title,url:s.url})).filter(s=>logic.safeHttpUrl(s.url));
+  return {fresh:!!(result&&result.fresh), reason:(result&&result.reason)||'', mode:(result&&result.mode)||'', sources};
 }
 function chunker(emit){let line='',pend='';const MIN=28;
   const flush=f=>{const t=pend.trim();if(t&&(f||t.length>=MIN)){emit(t);pend='';}};
@@ -106,9 +115,10 @@ async function azurePron(wav,ref){
 }
 
 const TYPES={'.html':'text/html; charset=utf-8','.webmanifest':'application/manifest+json','.png':'image/png','.svg':'image/svg+xml','.js':'text/javascript; charset=utf-8','.css':'text/css'};
-http.createServer(async(req,res)=>{try{
+function createApp(){return http.createServer(async(req,res)=>{try{
  const u=new URL(req.url,'http://x'),q=u.searchParams,sid=q.get('sid')||'default',P=u.pathname;
- if(P==='/api/health')return json(res,200,{ok:true,version:6,hasKey:!!KEY,model:MODEL,tts:!!OKEY,ttsModel:TTS_MODEL,sttModel:STT_MODEL,pron:!!(AZ_KEY&&AZ_REGION),accents:Object.keys(ACCENTS)});
+ if(P==='/api/health'){const mode=searchLib.searchMode(process.env);return json(res,200,{ok:true,version:7,hasKey:!!KEY,model:MODEL,tts:!!OKEY,ttsModel:TTS_MODEL,sttModel:STT_MODEL,pron:!!(AZ_KEY&&AZ_REGION),accents:Object.keys(ACCENTS),search:mode,searchNote:logic.SEARCH_NOTE[mode]||logic.SEARCH_BLOCKER,persistence:'device-local'});}
+ if(P==='/api/context'&&req.method==='POST'){const b=await jbody(req);const h=logic.toModelMessages(b.history||[]);sessions.set(sid,h);return json(res,200,{ok:true,turns:h.length,profile:logic.profileId(b.profile)});}
  if(P==='/api/reset'&&req.method==='POST'){sessions.delete(sid);return json(res,200,{ok:true});}
  if(P==='/api/tts'&&req.method==='POST'){const b=await jbody(req);
   try{const mp3=await tts(String(b.text||''),b.accent);res.writeHead(200,{'Content-Type':'audio/mpeg','Content-Length':mp3.length,'Cache-Control':'private, max-age=86400'});return res.end(mp3);}catch(e){return json(res,502,{error:e.message});}}
@@ -131,24 +141,37 @@ http.createServer(async(req,res)=>{try{
   let t;try{t=await stt(a,req.headers['content-type']||'audio/webm');}catch(e){send({type:'error',error:'Transcription impossible : '+e.message});return res.end();}
   tm.stt=Date.now()-T0;send({type:'user',text:t.text});
   if(!t.text){send({type:'reply',text:"Sorry, I didn't catch that. Could you say it again?"});send({type:'done'});return res.end();}
-  let userText=t.text;if(ctx.interrupted)userText+='\n['+prof(ctx).name+' ran out of time — his answer was cut off by the timer.]';if(ctx.secs)userText+=`\n[spoke ${Math.round(ctx.secs)}s]`;
+  let userText=t.text,searchInfo=null;
+  if(logic.shouldSearch({text:userText, explicit:!!ctx.search, mode:ctx.mode})){
+    const query=logic.minimalQuery(userText);
+    send({type:'search', state:'searching', query});
+    let result;
+    try{result=await searchLib.runSearch({query, env:process.env, fetch, timeoutMs:4500, complete:anthropicLookup});}
+    catch(e){console.error('search', e&&e.message);result={fresh:false, reason:'error', sources:[], mode:searchLib.searchMode(process.env)};}
+    searchInfo=publicSearch(result);
+    send(Object.assign({type:'search', state:result.fresh?'done':'unavailable'}, searchInfo));
+    userText=logic.lookupPrefix(query, result)+'\n\n'+userText;
+  }
+  if(ctx.interrupted)userText+='\n['+prof(ctx).name+' ran out of time — '+(prof(ctx).g==='f'?'her':'his')+' answer was cut off by the timer.]';if(ctx.secs)userText+=`\n[spoke ${Math.round(ctx.secs)}s]`;
   let chain=Promise.resolve(),idx=0;
   const ck=chunker(chunk=>{const i=idx++;const pr=tts(chunk,ctx.accent).then(b=>b.toString('base64')).catch(e=>{console.error(e.message);return null;});
     chain=chain.then(async()=>{const b64=await pr;if(i===0)tm.firstAudio=Date.now()-T0;send({type:'audio',i,text:chunk,audio:b64});});});
   try{let full='',first=true;for await(const d of claudeStream(sid,userText,ctx)){if(first){tm.firstToken=Date.now()-T0;first=false;}full+=d;send({type:'delta',text:d});ck.push(d);}
-    ck.end();tm.claudeDone=Date.now()-T0;const{text,meta}=splitMeta(full);send({type:'reply',text,meta});await chain;tm.total=Date.now()-T0;send({type:'done',timings:tm});console.log('timings',JSON.stringify(tm));}
+    ck.end();tm.claudeDone=Date.now()-T0;const{text,meta}=splitMeta(full);send({type:'reply',text,meta,search:searchInfo});await chain;tm.total=Date.now()-T0;send({type:'done',timings:tm});console.log('timings',JSON.stringify(tm));}
   catch(e){send({type:'error',error:e.message});}
   return res.end();
  }
- if(P==='/api/start'&&req.method==='POST'){ // teacher opens the conversation (no audio)
-  const b=await jbody(req);const ctx=b.ctx||{};const pn=prof(ctx).name;const opener=ctx.mode==='pressure'?`[Start the role-play now: greet ${pn} in character and ask your first question.]`:(ctx.profile==='chloe'&&ctx.first)?`[${pn} is opening the app for the very first time. Greet her warmly by name in one short sentence, say you'd love to get to know her, and ask ONE easy open question about herself and what she enjoys. Keep your English simple: you don't know her level yet.]`:`[${pn} just opened the app for the daily session. Greet warmly by name in one short sentence and ask an engaging open question — about the day, something you know they care about, or a due item.]`;
+ if(P==='/api/start'&&req.method==='POST'){ // teacher opens or resumes (no audio)
+  const b=await jbody(req);const ctx=b.ctx||{};const sid2=String(b.sid||sid);const prior=sessions.get(sid2)||[];const pn=prof(ctx).name;const opener=logic.openingText(ctx, prior.length, pn);
   try{let full='';for await(const d of claudeStream(String(b.sid||sid),opener,ctx))full+=d;const{text,meta}=splitMeta(full);let audio=null;try{audio=(await tts(text,ctx.accent)).toString('base64');}catch{}
    return json(res,200,{reply:text,meta,audio});}catch(e){return json(res,e.code||500,{error:e.message});}}
  if(P==='/api/recap'&&req.method==='POST'){const b=await jbody(req);
   const P0=prof(b.ctx);const h=(sessions.get(String(b.sid||sid))||[]).map(m=>(m.role==='user'?P0.name.toUpperCase()+': ':'TEACHER: ')+m.content).join('\n').slice(-12000);
   try{const recap=await claudeText({max_tokens:900,system:"Tu es le prof d'anglais de "+P0.name+" ("+(P0.g==='f'?"une femme : accorde au féminin, ex. « tu as été très claire »":"un homme : accorde au masculin")+"). Rédige un bilan de session court et motivant EN FRANÇAIS, en texte simple (pas de markdown sauf des tirets). Sections: 'Niveau estimé (CEFR)', 'Ce qui était bien', 'Erreurs à retenir' (forme fautive → forme correcte, max 5), 'Expressions apprises' (avec un exemple), 'Objectif pour la prochaine fois'. Max 180 mots.",
    messages:[{role:'user',content:'Conversation:\n'+(h||'(vide)')+'\n\nStats: '+JSON.stringify(b.stats||{})}]});return json(res,200,{recap});}catch(e){return json(res,502,{error:e.message});}}
- const pub=path.join(__dirname,'public');let f=path.join(pub,P==='/'?'index.html':path.normalize(P));
+ const pub=path.join(__dirname,'public');let f=path.join(pub,P==='/'?'index.html':P==='/favicon.ico'?'favicon-32.png':path.normalize(P));
  if(!f.startsWith(pub)||!fs.existsSync(f)||fs.statSync(f).isDirectory()){res.writeHead(404);return res.end();}
  res.writeHead(200,{'Content-Type':TYPES[path.extname(f)]||'application/octet-stream','Cache-Control':'no-cache'});fs.createReadStream(f).pipe(res);
-}catch(e){console.error(e);json(res,500,{error:String(e.message||e)});}}).listen(PORT,'0.0.0.0',()=>console.log('listening',PORT));
+}catch(e){console.error(e);json(res,500,{error:String(e.message||e)});}});}
+if(require.main===module) createApp().listen(PORT,'0.0.0.0',()=>console.log('listening',PORT));
+module.exports={createApp,sessions,sysFor};
