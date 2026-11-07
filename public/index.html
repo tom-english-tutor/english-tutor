@@ -7,9 +7,10 @@
 <header><div style="display:flex;align-items:center;gap:10px"><button id="meBtn" class="av tom" aria-label="Changer de profil">T</button><h1 id="title">English Coach</h1></div><div id="hbtns"><button class="ib" id="bilanBtn" hidden>Bilan</button><button class="ib" id="newBtn" hidden>Nouveau</button><button class="ib" id="setBtn" aria-label="Réglages">⚙︎</button></div></header>
 
 <div id="profiles" hidden><div class="pin"><div class="plogo">🎙️</div><h2>Qui parle ?</h2><p>Choisis ton profil</p>
- <button class="pbtn" data-p="tom"><span class="av big tom">T</span><span><b>Tom</b><small>Niveau B1 · entrepreneur</small></span><i>›</i></button>
- <button class="pbtn" data-p="chloe"><span class="av big chloe">C</span><span><b>Chloé</b><small>Niveau à découvrir</small></span><i>›</i></button>
- <p class="pnote">Chaque profil a sa propre progression.</p></div></div>
+ <button class="pbtn" type="button" data-p="tom"><span class="av big tom" aria-hidden="true">T</span><span><b>Tom</b><small>Niveau B1 · entrepreneur</small></span><i aria-hidden="true">›</i></button>
+ <button class="pbtn" type="button" data-p="chloe"><span class="av big chloe" aria-hidden="true">C</span><span><b>Chloé</b><small>Niveau à découvrir</small></span><i aria-hidden="true">›</i></button>
+ <button class="pbtn" type="button" data-p="sophie"><span class="av big sophie" aria-hidden="true">S</span><span><b>Sophie</b><small>Niveau à découvrir</small></span><i aria-hidden="true">›</i></button>
+ <p class="pnote">Chaque profil a sa propre progression, sur cet appareil.</p></div></div>
 <section class="view on" id="v-home"><div class="scroll">
  <div class="ringwrap"><svg width="230" height="230" viewBox="0 0 230 230"><circle cx="115" cy="115" r="100" fill="none" stroke="var(--line)" stroke-width="16"/><circle id="ring" cx="115" cy="115" r="100" fill="none" stroke="url(#rg)" stroke-width="16" stroke-linecap="round" transform="rotate(-90 115 115)" stroke-dasharray="628.3" stroke-dashoffset="628.3" style="transition:stroke-dashoffset 1s cubic-bezier(.2,.8,.2,1)"/><defs><linearGradient id="rg"><stop offset="0" stop-color="#5ac8fa"/><stop offset="1" stop-color="#0a84ff"/></linearGradient></defs></svg>
   <div class="lbl"><div class="big" id="todayMin">0</div><div class="sm" id="goalLbl">/ 15 min aujourd'hui</div></div></div>
@@ -78,7 +79,7 @@
  <label class="set">Rappel quotidien <button class="btn sec" style="width:auto;padding:8px 14px;font-size:14px" id="icsBtn">Ajouter au calendrier</button></label>
  <label class="set">Conversation <button class="btn sec" type="button" style="width:auto;padding:8px 14px;font-size:14px" id="forgetChat">Effacer</button></label>
  <label class="set">Notes du coach <button class="btn sec" type="button" style="width:auto;padding:8px 14px;font-size:14px" id="forgetNotes">Effacer</button></label>
- <p class="fine" id="memInfo">L’historique et les notes restent sur cet appareil, séparés pour Tom et Chloé. Un autre téléphone ne les voit pas. Effacer la conversation garde les cartes et les réglages.</p>
+ <p class="fine" id="memInfo">L’historique et les notes restent sur cet appareil, séparés pour Tom, Chloé et Sophie. Un autre téléphone ne les voit pas. Effacer la conversation garde les cartes et les réglages.</p>
  <p class="fine" id="searchInfo"></p>
  <div style="color:var(--mute);font-size:13px;margin-top:12px" id="pronInfo"></div>
  <button class="btn sec" id="setClose" style="margin-top:16px">OK</button></div></div>

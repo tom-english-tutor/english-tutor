@@ -1,13 +1,13 @@
 'use strict';
 const $=s=>document.querySelector(s),$$=s=>[...document.querySelectorAll(s)];
 /* ---------- profiles ---------- */
-const PROFILES={tom:{name:'Tom',ini:'T',lvl:'B1',g:'m'},chloe:{name:'Chloé',ini:'C',lvl:'?',g:'f'}};
+const PROFILES={tom:{name:'Tom',ini:'T',lvl:'B1',g:'m'},chloe:{name:'Chloé',ini:'C',lvl:'?',g:'f'},sophie:{name:'Sophie',ini:'S',lvl:'?',g:'f'}};
 (()=>{if(localStorage.getItem('migratedV6'))return;['settings','sid','days','vocab','levels','cards','flow','demoSeeded'].forEach(k=>{const v=localStorage.getItem(k);if(v!=null&&localStorage.getItem('p:tom:'+k)==null)localStorage.setItem('p:tom:'+k,v);if(v!=null)localStorage.removeItem(k);});localStorage.setItem('migratedV6','1');})();
 const DEMO_P=(location.hash.match(/^#demo-\w+@(\w+)/)||[])[1];
 let PROF=DEMO_P||localStorage.getItem('profile');if(!PROFILES[PROF]||location.hash==='#demo-profiles')PROF=null;
 const ME=PROFILES[PROF]||PROFILES.tom;const NS='p:'+(PROF||'_')+':';
 const LS={get:(k,d)=>{try{const v=localStorage.getItem(NS+k);return v==null?d:JSON.parse(v);}catch{return d;}},set:(k,v)=>localStorage.setItem(NS+k,JSON.stringify(v))};
-function pickProfile(id){localStorage.setItem('profile',id);location.hash='';location.reload();}
+function pickProfile(id){if(!PROFILES[id]||!CoachLogic.profileId(id))return;localStorage.setItem('profile',id);location.hash='';location.reload();}
 function switchProfile(){localStorage.removeItem('profile');location.hash='';location.reload();}
 const S=Object.assign({goal:15,accent:'us',speed:1,theme:matchMedia('(prefers-color-scheme: light)').matches?'light':'dark'},LS.get('settings',{}));
 const saveS=()=>LS.set('settings',S);
@@ -111,7 +111,7 @@ function refreshHome(){const d=days[today()]||{secs:0};const min=d.secs/60;$('#t
  $('#ring').style.strokeDashoffset=628.3*(1-Math.min(1,min/S.goal));$('#streak').textContent=streak();$('#hDue').textContent=dueCards().length;
  $('#hWpm').textContent=d.secs>20?Math.round(d.words/(d.secs/60)):'–';$('#hLvl').textContent=lastLevel();
  const st=LS.get('flow',{})[today()]||0;['f1','f2','f3'].forEach((f,i)=>$('#'+f).classList.toggle('on',st>i));
- const note=$('#persistNote');if(note)note.textContent=thread.length?('Conversation de '+ME.name+' enregistrée sur cet appareil ('+thread.length+' message'+(thread.length>1?'s':'')+').'):'Les conversations restent sur cet appareil. Tom et Chloé ne partagent rien.';}
+ const note=$('#persistNote');if(note)note.textContent=thread.length?('Conversation de '+ME.name+' enregistrée sur cet appareil ('+thread.length+' message'+(thread.length>1?'s':'')+').'):'Les conversations restent sur cet appareil. Chaque profil est séparé.';}
 function flowMark(n){const f=LS.get('flow',{});f[today()]=Math.max(f[today()]||0,n);LS.set('flow',f);}
 $('#startSession').onclick=()=>{unlock();session=true;if(dueCards().length){show('review');startReview(true);}else{flowMark(1);openChat(false,null,{resume:true});}};
 $('#freeTalk').onclick=()=>{unlock();session=false;openChat(false,null,{resume:true});};
