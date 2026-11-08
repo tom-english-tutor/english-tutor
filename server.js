@@ -8,7 +8,7 @@ const OKEY=E.OPENAI_API_KEY,TTS_MODEL=E.TTS_MODEL||'gpt-4o-mini-tts',STT_MODEL=E
 const AZ_KEY=E.AZURE_SPEECH_KEY,AZ_REGION=E.AZURE_SPEECH_REGION;
 const SYS=fs.readFileSync(path.join(__dirname,'prompt.md'),'utf8');
 const ACCENTS={
- us:{voice:E.VOICE_US||E.VOICE||'coral',accent:'a natural General American accent',spelling:'American'},
+ us:{voice:E.VOICE_US||E.VOICE||'marin',accent:'a natural General American accent',spelling:'American'},
  uk:{voice:E.VOICE_UK||'fable',accent:'a natural Southern British (London) accent',spelling:'British'},
  au:{voice:E.VOICE_AU||'sage',accent:'a natural, relaxed Australian accent',spelling:'Australian/British'}};
 const acc=a=>ACCENTS[a]||ACCENTS.us;
@@ -18,6 +18,7 @@ const PRESSURE={
  meeting:'a sceptical client in a tense meeting who is unhappy about delays and price, and pushes {{NAME}} for clear answers',
  pitch:'a sharp, impatient investor (VC) listening to {{NAME}} pitch {{PITCH}} and asking hard questions about numbers, market and competition'};
 const sessions=new Map();
+const journals=new Map();
 const englishOnly=t=>t.replace(/^\s*##.*$/ms,'').split('\n').map(l=>l.replace(/Tip\s*:.*$/i,'')).join(' ').replace(/\s+/g,' ').trim();
 function body(req,max=25e6){return new Promise((res,rej)=>{const c=[];let n=0;req.on('data',d=>{n+=d.length;if(n>max){rej(new Error('Fichier trop gros'));req.destroy();}else c.push(d);});req.on('end',()=>res(Buffer.concat(c)));req.on('error',rej);});}
 const json=(res,code,o)=>{res.writeHead(code,{'Content-Type':'application/json'});res.end(JSON.stringify(o));};
@@ -27,7 +28,7 @@ function parseB64(h){try{return h?JSON.parse(Buffer.from(h,'base64').toString('u
 async function tts(text,accent){
   if(!OKEY)throw new Error('OPENAI_API_KEY manquante');
   const input=englishOnly(text).slice(0,4000);if(!input)throw new Error('rien à lire');
-  const p={model:TTS_MODEL,voice:acc(accent).voice,input,response_format:'mp3'};if(TTS_MODEL.includes('gpt-4o'))p.instructions=voiceInstr(accent);
+  const p=logic.speechRequest({text:input,model:TTS_MODEL,voice:acc(accent).voice,accentPhrase:acc(accent).accent});
   const r=await fetch('https://api.openai.com/v1/audio/speech',{method:'POST',headers:{Authorization:'Bearer '+OKEY,'Content-Type':'application/json'},body:JSON.stringify(p)});
   if(!r.ok)throw new Error('TTS '+r.status+': '+(await r.text()).slice(0,200));
   return Buffer.from(await r.arrayBuffer());
@@ -62,7 +63,7 @@ function personal(t,c){const p=prof(c);t=t.split('{{PROFILE}}').join(p.profile).
  if(p.g==='f')t=t.replace(/\bhe\b/g,'she').replace(/\bHe\b/g,'She').replace(/\bhim\b/g,'her').replace(/\bhis\b/g,'her').replace(/\bHis\b/g,'Her').replace(/\bhimself\b/g,'herself');return t;}
 function sysFor(ctx){
   const c=ctx||{};
-  let x=SYS+logic.sessionAddendum(Object.assign({}, c, {spelling:acc(c.accent).spelling}));
+  let x=SYS+logic.sessionAddendum(Object.assign({}, c, {spelling:acc(c.accent).spelling,journal:c.journal}));
   if(c.mode==='pressure'){
     x+=`\n\n# MODE PRESSION (performance-anxiety training) — ACTIVE
 You are now ${PRESSURE[c.scenario]||PRESSURE.interview}. Stay fully in character.
@@ -113,8 +114,8 @@ async function azurePron(wav,ref){
 const TYPES={'.html':'text/html; charset=utf-8','.webmanifest':'application/manifest+json','.png':'image/png','.svg':'image/svg+xml','.js':'text/javascript; charset=utf-8','.css':'text/css'};
 function createApp(){return http.createServer(async(req,res)=>{try{
  const u=new URL(req.url,'http://x'),q=u.searchParams,sid=q.get('sid')||'default',P=u.pathname;
- if(P==='/api/health'){const mode=searchLib.searchMode(process.env);return json(res,200,{ok:true,version:logic.APP_VERSION,hasKey:!!KEY,model:MODEL,tts:!!OKEY,ttsModel:TTS_MODEL,sttModel:STT_MODEL,pron:!!(AZ_KEY&&AZ_REGION),accents:Object.keys(ACCENTS),profiles:logic.PROFILE_IDS,search:mode,searchNote:logic.SEARCH_NOTE[mode]||logic.SEARCH_BLOCKER,persistence:'device-local'});}
- if(P==='/api/context'&&req.method==='POST'){const b=await jbody(req);if(b.profile!=null&&b.profile!==''&&!logic.profileId(b.profile))return json(res,400,{error:'profil inconnu'});const h=logic.toModelMessages(b.history||[]);sessions.set(sid,h);return json(res,200,{ok:true,turns:h.length,profile:logic.profileId(b.profile)});}
+ if(P==='/api/health'){const mode=searchLib.searchMode(process.env);return json(res,200,{ok:true,version:logic.APP_VERSION,hasKey:!!KEY,model:MODEL,tts:!!OKEY,ttsModel:TTS_MODEL,ttsInstructions:String(TTS_MODEL).includes('gpt-4o'),voices:{us:acc('us').voice,uk:acc('uk').voice,au:acc('au').voice},sttModel:STT_MODEL,pron:!!(AZ_KEY&&AZ_REGION),accents:Object.keys(ACCENTS),profiles:logic.PROFILE_IDS,search:mode,searchNote:logic.SEARCH_NOTE[mode]||logic.SEARCH_BLOCKER,persistence:'device-local'});}
+ if(P==='/api/context'&&req.method==='POST'){const b=await jbody(req);if(b.profile!=null&&b.profile!==''&&!logic.profileId(b.profile))return json(res,400,{error:'profil inconnu'});const h=logic.toModelMessages(b.history||[]);sessions.set(sid,h);if(typeof b.journal==='string')journals.set(sid,b.journal.slice(0,8000));return json(res,200,{ok:true,turns:h.length,profile:logic.profileId(b.profile),journal:journals.has(sid)});}
  if(P==='/api/reset'&&req.method==='POST'){sessions.delete(sid);return json(res,200,{ok:true});}
  if(P==='/api/tts'&&req.method==='POST'){const b=await jbody(req);
   try{const mp3=await tts(String(b.text||''),b.accent);res.writeHead(200,{'Content-Type':'audio/mpeg','Content-Length':mp3.length,'Cache-Control':'private, max-age=86400'});return res.end(mp3);}catch(e){return json(res,502,{error:e.message});}}
@@ -131,6 +132,7 @@ function createApp(){return http.createServer(async(req,res)=>{try{
    const m=t.match(/\{[\s\S]*\}/);return json(res,200,m?JSON.parse(m[0]):{score:0,feedback:t});}catch(e){return json(res,502,{error:e.message});}}
  if(P==='/api/stream'&&req.method==='POST'){
   const T0=Date.now(),tm={};const a=await body(req);const ctx=parseB64(req.headers['x-ctx']);ctx.accent=q.get('accent')||ctx.accent;
+  const posted=journals.get(sid);if(posted&&(!ctx.journal||posted.length>String(ctx.journal).length))ctx.journal=posted;
   res.writeHead(200,{'Content-Type':'text/event-stream','Cache-Control':'no-cache, no-transform','Connection':'keep-alive','X-Accel-Buffering':'no'});
   const send=o=>res.write('data: '+JSON.stringify(o)+'\n\n');
   if(a.length<800){send({type:'error',error:"Enregistrement trop court. Appuie, parle, puis appuie à nouveau."});return res.end();}
