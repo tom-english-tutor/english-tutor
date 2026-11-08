@@ -173,8 +173,40 @@
     const mem = normalizeMemory(c.memory).slice(-12);
     if (mem.length) x += '\n\n# Learner memory — durable facts from earlier talks. Use one when it fits the moment. Do not recite this list, and do not invent facts that are not here or in the conversation.\n- ' + mem.map(m => m.text).join('\n- ');
     if (c.level) x += '\n\n# Last estimated level from previous sessions: ' + String(c.level).slice(0, 8);
+    const asked = (Array.isArray(c.asked) ? c.asked : []).map(q => String(q || '').replace(/\s+/g, ' ').trim().slice(0, 160)).filter(q => q.length >= 8).slice(-8);
+    if (c.mode === 'pressure') {
+      if (asked.length) x += '\n\n# Already asked in this role-play — ask a different question, still in character:\n- ' + asked.join('\n- ');
+    } else {
+      if (c.hasThread) x += '\n\n# Continuity\nThe conversation is already underway. Do not greet again, do not restart with how his day was, and do not repeat a question you already asked. Follow the latest thing he said. One new question only. No list of topics.';
+      if (asked.length) x += '\n\n# Already asked — do not ask these again or lightly rephrase them:\n- ' + asked.join('\n- ');
+      if (c.hasThread) x += '\nIf the talk is looping, bring one concrete new situation (a place, a choice, or a short role-play). Do not invent memories or fresh facts that are not in the conversation or the learner memory.';
+    }
     x += '\n\n# Tone reminder\nFriend to friend, same age. No stock praise. Do not say Wow, incredible, awesome, or great response. React to what was just said, then one question.';
     return x;
+  }
+
+  function recentQuestions(thread) {
+    const seen = new Set();
+    const out = [];
+    const list = Array.isArray(thread) ? thread : [];
+    for (const m of list) {
+      if (!m || (m.role !== 'ai' && m.role !== 'assistant')) continue;
+      const text = String(m.text || m.content || '');
+      const bits = text.match(/[^.!?\n]*\?/g) || [];
+      for (const bit of bits) {
+        const q = bit.replace(/\s+/g, ' ').trim().slice(0, 160);
+        const key = q.toLowerCase();
+        if (q.length < 8 || seen.has(key)) continue;
+        seen.add(key);
+        out.push(q);
+      }
+    }
+    return out.slice(-8);
+  }
+
+  function shouldContinueAloud(thread) {
+    const t = normalizeThread(thread);
+    return t.length > 0 && t[t.length - 1].role === 'me';
   }
 
   function openingKind(ctx, priorCount) {
@@ -190,9 +222,9 @@
     const pn = name || 'Tom';
     const kind = openingKind(ctx, priorCount);
     if (kind === 'pressure') return '[Start the role-play now: greet ' + pn + ' in character and ask your first question.]';
-    if (kind === 'resume') return '[' + pn + ' is back in this same conversation. The messages above already happened. Pick up one specific detail from them. One or two short sentences, then one question. Do not greet as a first meeting. Do not praise. Do not summarise the whole history.]';
-    if (kind === 'discover') return '[' + pn + ' is opening the app for the very first time. Greet her by name in one short sentence and ask ONE easy open question about herself and what she enjoys. Keep your English simple: you don\'t know her level yet. No praise.]';
-    return '[' + pn + ' just opened the app for the daily session. One short sentence and one open question — about the day, something you know they care about, or a due item. No praise.]';
+    if (kind === 'resume') return '[' + pn + ' is back. The messages above already happened. Continue from the last thing he said. Do not say hello again, do not ask how his day was, and do not repeat a question already in the thread. One new follow-up only. No praise. No list of topics.]';
+    if (kind === 'discover') return '[' + pn + ' is opening the app for the very first time. Greet her by name in one short sentence and ask ONE easy open question about herself and what she enjoys. Keep your English simple: you don\'t know her level yet. No praise. Do not ask this discovery question again later.]';
+    return '[' + pn + ' is here for a session and there is no earlier thread. Skip a generic how-was-your-day opening. One concrete hook from the profile or one due item. No praise. No list of topics.]';
   }
 
   const EXPLICIT = /\b(look\s+(?:this|it|that)\s+up|look\s+up\b|search(?:\s+the\s+web|\s+online)?|check\s+online|google\b|look\s+online|cherche(?:r|z)?\b|recherche(?:r|z)?\b|v[ée]rifie en ligne|regarde sur (?:internet|le web))\b/i;
@@ -251,7 +283,8 @@
   }
 
   const LEGACY_KEYS = ['settings', 'sid', 'days', 'vocab', 'levels', 'cards', 'flow', 'demoSeeded'];
-  const APP_VERSION = 9;
+  const APP_VERSION = 10;
+  const SESSION_MAX_GAP_MS = 90000;
   const SKIP_ON_IMPORT = { profile: 1 };
 
   function recoverLegacy(storage) {
@@ -328,6 +361,7 @@
         turns: Math.max(+x.turns || 0, +y.turns || 0),
         uniq: [...new Set([...(x.uniq || []), ...(y.uniq || [])])].slice(0, 3000)
       };
+      if (x.sessionSecs != null || y.sessionSecs != null) out[day].sessionSecs = Math.max(+x.sessionSecs || 0, +y.sessionSecs || 0);
     }
     return out;
   }
@@ -449,6 +483,42 @@
     });
   }
 
+  function tickSession(clock, now, visible, maxGap) {
+    const gapLimit = maxGap == null ? SESSION_MAX_GAP_MS : maxGap;
+    const c = clock && typeof clock === 'object'
+      ? { active: !!clock.active, last: +clock.last || 0, hidden: !!clock.hidden }
+      : { active: false, last: 0, hidden: false };
+    if (!c.active) return { clock: c, addMs: 0 };
+    const last = c.last || now;
+    const gap = now - last;
+    if (!(gap > 0)) return { clock: { active: true, last: now, hidden: !visible }, addMs: 0 };
+    if (gap > gapLimit) return { clock: { active: false, last: now, hidden: false }, addMs: 0 };
+    if (!visible || c.hidden) return { clock: { active: true, last: now, hidden: !visible }, addMs: 0 };
+    return { clock: { active: true, last: now, hidden: false }, addMs: gap };
+  }
+
+  function startSession(clock, now) {
+    return { active: true, last: now, hidden: false };
+  }
+
+  function pauseSession(clock, now, visible) {
+    const t = tickSession(clock, now, !!visible);
+    return { clock: { active: false, last: now, hidden: false }, addMs: t.addMs };
+  }
+
+  function noteSessionSecs(day, add) {
+    if (!day || typeof day !== 'object') return 0;
+    if (typeof day.sessionSecs !== 'number' || Number.isNaN(day.sessionSecs)) day.sessionSecs = +day.secs || 0;
+    day.sessionSecs += Math.max(0, +add || 0);
+    return day.sessionSecs;
+  }
+
+  function practiceSecs(day) {
+    if (!day) return 0;
+    if (typeof day.sessionSecs === 'number' && !Number.isNaN(day.sessionSecs)) return day.sessionSecs;
+    return +day.secs || 0;
+  }
+
   function voiceInstructions(accentPhrase) {
     return 'Voice: a warm, relaxed native English speaker in their late twenties with ' + accentPhrase + ' — a friend talking, not a narrator, announcer, or teacher.\n' +
       'Tone: calm and even, like an equal. Friendly, not bright, not a cheerleader. No performative excitement.\n' +
@@ -460,6 +530,7 @@
     THREAD_CAP, MEMORY_CAP, SEARCH_BLOCKER, SEARCH_NOTE, PROFILE_IDS, DISCOVERY_IDS, LEGACY_KEYS, APP_VERSION,
     profileId, storageKey, wipe, safeHttpUrl, cleanExcerpt, slimMeta,
     recoverLegacy, snapshot, parseTransfer, planImport, applyImport, profileStats,
+    recentQuestions, shouldContinueAloud, tickSession, startSession, pauseSession, noteSessionSecs, practiceSecs, SESSION_MAX_GAP_MS,
     normalizeThread, appendMessage, toModelMessages, conversationForApi,
     normalizeMemory, mergeMemory, sessionAddendum, openingKind, openingText,
     shouldSearch, minimalQuery, lookupPrefix, praiseFlags, voiceInstructions

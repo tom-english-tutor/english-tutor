@@ -11,7 +11,7 @@ Conversations, learner notes, review cards, and settings are in `localStorage`, 
 
 This is one home-screen shortcut, or one browser, on one device. It is not an account. On iPhone and iPad, a new home-screen shortcut does not see the data of the previous shortcut, even at the same address. Do not delete the old shortcut. When it shows version 9, use Réglages → Exporter, then Importer on the new shortcut. The import adds and merges; it does not delete either side. The Render service has no database.
 
-"Nouveau", or Réglages → Conversation → Effacer, clears that profile's transcript only. Réglages → Notes du coach clears remembered facts. Cards, mistakes, streaks, and settings stay until you remove them yourself.
+The daily ring is session time: speaking, the coach's replies, and ordinary pauses while the lesson is open. It pauses when the app is in the background or left for more than a minute and a half, and it does not fill in time for older days that only recorded speech. Words per minute still use speaking time. "Nouveau", or Réglages → Conversation → Effacer, clears that profile's transcript only. Réglages → Notes du coach clears remembered facts. Cards, mistakes, streaks, and settings stay until you remove them yourself.
 
 ## Tone
 

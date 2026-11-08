@@ -132,8 +132,9 @@ test('restored turns are the messages the model sees, including a resume pickup'
   const resume = logic.conversationForApi(tom, logic.openingText({ resume: true }, tom.length, 'Tom'));
   assert.equal(logic.openingKind({ resume: true }, tom.length), 'resume');
   assert.match(resume[0].content, /sleep book/);
-  assert.match(resume[resume.length - 1].content, /specific detail/);
-  assert.match(resume[resume.length - 1].content, /Do not praise/);
+  assert.match(resume[resume.length - 1].content, /last thing he said/);
+  assert.match(resume[resume.length - 1].content, /do not repeat a question/);
+  assert.match(resume[resume.length - 1].content, /No praise/);
   assert.equal(logic.openingKind({ resume: true }, 0), 'daily');
   assert.equal(logic.openingKind({ profile: 'chloe', first: true }, 0), 'discover');
   assert.equal(logic.openingKind({ mode: 'pressure', resume: true }, 4), 'pressure');
@@ -297,7 +298,7 @@ test('health and context routes keep two profiles apart and do not enable billed
   const port = app.address().port;
   try {
     const health = await (await fetch('http://127.0.0.1:' + port + '/api/health')).json();
-    assert.equal(health.version, 9);
+    assert.equal(health.version, 10);
     assert.deepEqual(health.profiles, ['tom', 'chloe', 'sophie']);
     assert.equal(health.persistence, 'device-local');
     assert.equal(health.search, 'reference');

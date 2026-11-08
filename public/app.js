@@ -24,10 +24,20 @@ const days=LS.get('days',{});const vocab=new Set(LS.get('vocab',[]));const level
 const dayRec=(d=today())=>days[d]||(days[d]={secs:0,words:0,errors:0,turns:0,uniq:[]});
 const words=t=>(t.toLowerCase().match(/[a-z']+/g)||[]);
 function logSpeech(text,secs){const d=dayRec(),w=words(text);d.secs+=secs;d.words+=w.length;d.turns++;const u=new Set(d.uniq);w.forEach(x=>{u.add(x);vocab.add(x)});d.uniq=[...u].slice(0,3000);LS.set('days',days);LS.set('vocab',[...vocab].slice(-20000));refreshHome();}
+let clock=null;
+try{clock=LS.get('clock',null);}catch(e){clock=null;}
+function saveClock(){try{LS.set('clock',clock);}catch(e){}}
+function paintSessionBtn(){const b=$('#sessionCtl');if(!b)return;b.hidden=!clock;if(!clock)return;b.textContent=clock.active?'Pause':'Reprendre';b.setAttribute('aria-pressed',clock.active?'true':'false');}
+function syncClock(visible){if(!clock){paintSessionBtn();return;}const show=visible!==false&&document.visibilityState!=='hidden';const r=CoachLogic.tickSession(clock,Date.now(),show);clock=r.clock;if(r.addMs>0){const d=dayRec();CoachLogic.noteSessionSecs(d,r.addMs/1000);LS.set('days',days);refreshHome();}saveClock();paintSessionBtn();}
+function beginPractice(){if(clock&&clock.active&&!clock.hidden)return;clock=CoachLogic.startSession(clock,Date.now());saveClock();paintSessionBtn();}
+function pausePractice(){const r=CoachLogic.pauseSession(clock,Date.now(),document.visibilityState!=='hidden');clock=r.clock;if(r.addMs>0){const d=dayRec();CoachLogic.noteSessionSecs(d,r.addMs/1000);LS.set('days',days);refreshHome();}saveClock();paintSessionBtn();}
+document.addEventListener('visibilitychange',()=>{if(!clock||!clock.active)return;if(document.visibilityState==='hidden'){const r=CoachLogic.tickSession(clock,Date.now(),false);clock=r.clock;if(r.addMs>0){const d=dayRec();CoachLogic.noteSessionSecs(d,r.addMs/1000);LS.set('days',days);}saveClock();}else syncClock(true);});
+window.addEventListener('pagehide',()=>{if(!clock||!clock.active)return;const r=CoachLogic.tickSession(clock,Date.now(),false);clock=r.clock;saveClock();});
+setInterval(()=>{if(clock&&clock.active&&document.visibilityState!=='hidden')syncClock(true);},5000);
 function logErrors(n){dayRec().errors+=n;LS.set('days',days);}
 function lastLevel(){return(levels[levels.length-1]||{}).l||ME.lvl;}
 function logLevel(l){if(!/^[ABC][12]$/.test(l||''))return;levels.push({d:today(),l});LS.set('levels',levels.slice(-500));}
-function streak(){const g=S.goal*60;let n=0,d=new Date();if((days[today(d)]||{}).secs>=g)n++;for(;;){d.setDate(d.getDate()-1);if((days[today(d)]||{}).secs>=g)n++;else break;}return n;}
+function streak(){const g=S.goal*60;let n=0,d=new Date();if(CoachLogic.practiceSecs(days[today(d)]||{})>=g)n++;for(;;){d.setDate(d.getDate()-1);if(CoachLogic.practiceSecs(days[today(d)]||{})>=g)n++;else break;}return n;}
 function lastDays(n){const out=[];const d=new Date();d.setDate(d.getDate()-n+1);for(let i=0;i<n;i++){out.push([today(d),days[today(d)]||{secs:0,words:0,errors:0,uniq:[]}]);d.setDate(d.getDate()+1);}return out;}
 
 /* ---------- spaced repetition (SM-2) ---------- */
@@ -45,7 +55,7 @@ function saveMemory(){try{LS.set('memory',memory);}catch(e){}}
 function ctx(extra){const incoming=extra||{};const pressure=incoming.mode==='pressure';extra=Object.assign({profile:PROF||'tom',level:lastLevel(),first:!Object.keys(days).length&&!thread.length},incoming);const due=dueCards().slice(0,6).map(c=>c.type==='fix'?`"${c.en}" (used to say: "${c.wrong}")`:`expression "${c.en}" (${c.fr})`);
  const recent=cards.slice(-10).map(c=>c.en);
  const history=pressure?[]:CoachLogic.toModelMessages(thread).slice(-8).map(m=>({role:m.role,content:String(m.content).slice(0,240)}));
- return Object.assign({accent:S.accent,due,recent,memory:memory.slice(-12).map(m=>m.text),history},extra);}
+ return Object.assign({accent:S.accent,due,recent,memory:memory.slice(-12).map(m=>m.text),history,asked:pressure?[]:CoachLogic.recentQuestions(thread),hasThread:!pressure&&thread.length>0},extra);}
 const b64=o=>btoa(unescape(encodeURIComponent(JSON.stringify(o))));
 let lookupOnce=false;
 function syncLookup(){const b=$('#lookupBtn');if(!b)return;b.classList.toggle('on',lookupOnce);b.setAttribute('aria-pressed',lookupOnce?'true':'false');b.textContent=lookupOnce?'Chercher · oui':'Chercher';}
@@ -108,14 +118,14 @@ const openSheet=id=>$('#'+id).classList.add('on'),closeSheet=id=>$('#'+id).class
 $$('.sheet').forEach(s=>s.addEventListener('click',e=>{if(e.target===s)s.classList.remove('on');}));
 
 /* ---------- home ---------- */
-function refreshHome(){const d=days[today()]||{secs:0};const min=d.secs/60;$('#todayMin').textContent=Math.floor(min);$('#goalLbl').textContent=`/ ${S.goal} min aujourd'hui`;
+function refreshHome(){const d=days[today()]||{secs:0};const min=CoachLogic.practiceSecs(d)/60;$('#todayMin').textContent=Math.floor(min);$('#goalLbl').textContent=`/ ${S.goal} min de séance`;
  $('#ring').style.strokeDashoffset=628.3*(1-Math.min(1,min/S.goal));$('#streak').textContent=streak();$('#hDue').textContent=dueCards().length;
  $('#hWpm').textContent=d.secs>20?Math.round(d.words/(d.secs/60)):'–';$('#hLvl').textContent=lastLevel();
  const st=LS.get('flow',{})[today()]||0;['f1','f2','f3'].forEach((f,i)=>$('#'+f).classList.toggle('on',st>i));
  const note=$('#persistNote');if(note)note.textContent=thread.length?('Conversation de '+ME.name+' enregistrée sur cet appareil ('+thread.length+' message'+(thread.length>1?'s':'')+').'):'Les conversations restent sur cet appareil. Chaque profil est séparé.';}
 function flowMark(n){const f=LS.get('flow',{});f[today()]=Math.max(f[today()]||0,n);LS.set('flow',f);}
-$('#startSession').onclick=()=>{unlock();session=true;if(dueCards().length){show('review');startReview(true);}else{flowMark(1);openChat(false,null,{resume:true});}};
-$('#freeTalk').onclick=()=>{unlock();session=false;openChat(false,null,{resume:true});};
+$('#startSession').onclick=()=>{unlock();beginPractice();session=true;if(dueCards().length){show('review');startReview(true);}else{flowMark(1);openChat(false,null,{resume:true});}};
+$('#freeTalk').onclick=()=>{unlock();beginPractice();session=false;openChat(false,null,{resume:true});};
 $('#pressureBtn').onclick=()=>openSheet('sh-pressure');
 let session=false;
 
@@ -168,7 +178,7 @@ async function openChat(pressure,scenario,opts){opts=opts||{};mode={pressure:!!p
  if(opts.fresh){thread=[];saveThread();try{sessionStorage.removeItem(resumeKey());}catch(e){}await fetch('/api/reset?sid='+encodeURIComponent(sid),{method:'POST'}).catch(()=>{});hello();await beginGreeting({resume:false});return;}
  renderThread();
  let resumed=false;try{resumed=!!sessionStorage.getItem(resumeKey());}catch(e){}
- if(opts.resume&&thread.length&&!resumed){try{sessionStorage.setItem(resumeKey(),'1');}catch(e){}await beginGreeting({resume:true});}
+ if(opts.resume&&thread.length&&!resumed){try{sessionStorage.setItem(resumeKey(),'1');}catch(e){}if(CoachLogic.shouldContinueAloud(thread))await beginGreeting({resume:true});else setState('idle','À toi');}
  else if(opts.resume&&!thread.length)await beginGreeting({resume:false});
  else setState('idle',thread.length?'À toi':'Prêt');}
 function afterTeacher(){if(!mode.pressure)return setState('idle','À toi');
@@ -176,7 +186,7 @@ function afterTeacher(){if(!mode.pressure)return setState('idle','À toi');
 micBtn.onclick=async()=>{
  if(mainRec&&mainRec.on){clearInterval(pTimerId);$('#pTimer').textContent='';const r=mainRec;mainRec=null;drawIdle();sendTurn(await r.stop(),r.interrupted);return;}
  if(micBtn.classList.contains('busy'))return;
- try{mainRec=new Rec();await mainRec.start();}catch(e){mainRec=null;return bubble(e.message,'err');}
+ try{beginPractice();mainRec=new Rec();await mainRec.start();}catch(e){mainRec=null;return bubble(e.message,'err');}
  setState('rec','Listening');draw(mainRec.an);
  if(mode.pressure){let t=+S.pSecs||45;$('#pTimer').textContent=t+'s';clearInterval(pTimerId);pTimerId=setInterval(()=>{t--;$('#pTimer').textContent=t+'s';if(t<=10)setState('rec',`Plus que ${t}s`,true);if(t<=0&&mainRec){mainRec.interrupted=true;micBtn.click();}},1000);}};
 async function sendTurn(rec,interrupted){setState('busy','Thinking');if(rec.blob.size<1500)return setState('idle','Trop court — réessaie');
@@ -201,7 +211,7 @@ $('#bilanBtn').onclick=async()=>{setState('busy','Bilan…');stopAudio();const d
  try{if(!mode.pressure)await syncContext();const r=await fetch('/api/recap',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({sid,ctx:{profile:PROF||'tom'},stats:{minutesToday:Math.round((d.secs||0)/60),wordsToday:d.words,errorsToday:d.errors,streak:streak()}})});const j=await r.json();if(!r.ok)throw new Error(j.error);
   const el=document.createElement('div');el.className='recap';el.innerHTML='<b>Bilan de session</b>';el.append(j.recap);log.appendChild(el);log.scrollTop=1e9;flowMark(3);}catch(e){bubble('Erreur : '+e.message,'err');}setState('idle','Prêt');};
 $('#pQuit').onclick=()=>{clearInterval(pTimerId);stopAudio();mode={pressure:false};$('#pBanner').hidden=true;const lookup=$('#lookupBtn');if(lookup)lookup.hidden=false;renderThread();show('home');};
-$$('#sh-pressure [data-sc]').forEach(b=>b.onclick=()=>{unlock();closeSheet('sh-pressure');openChat(true,b.dataset.sc);});
+$$('#sh-pressure [data-sc]').forEach(b=>b.onclick=()=>{unlock();beginPractice();closeSheet('sh-pressure');openChat(true,b.dataset.sc);});
 const pS=$('#pSecs');pS.value=S.pSecs||45;$('#pSecsV').textContent=pS.value+' s';pS.oninput=()=>{S.pSecs=+pS.value;saveS();$('#pSecsV').textContent=pS.value+' s';};$('#pClose').onclick=()=>closeSheet('sh-pressure');
 
 /* ---------- shadowing ---------- */
@@ -221,7 +231,7 @@ $('#shMic').onclick=async()=>{const m=$('#shMic');
    const c=cards.find(x=>x.en===shTarget);if(c&&pct>=90&&c.reps===0)schedule(c,4);}
   catch(e){$('#shResult').innerHTML=`<p class="msg err">${esc(e.message)}</p>`;}
   m.className='mic smallmic';return;}
- try{stopAudio();shRec=new Rec();await shRec.start();m.className='mic smallmic rec';$('#shState').textContent='Je t\'écoute… appuie pour finir';}catch(e){shRec=null;$('#shResult').innerHTML=`<p class="msg err">${esc(e.message)}</p>`;}};
+ try{beginPractice();stopAudio();shRec=new Rec();await shRec.start();m.className='mic smallmic rec';$('#shState').textContent='Je t\'écoute… appuie pour finir';}catch(e){shRec=null;$('#shResult').innerHTML=`<p class="msg err">${esc(e.message)}</p>`;}};
 async function pronScore(rec,ref){try{const wav=await toWav16k(rec.blob);const r=await fetch('/api/pron?ref='+encodeURIComponent(ref),{method:'POST',headers:{'Content-Type':'audio/wav'},body:wav});const j=await r.json();return j.enabled&&!j.error?j:null;}catch(e){console.warn(e);return null;}}
 
 /* ---------- oral review ---------- */
@@ -243,7 +253,7 @@ $('#rMic').onclick=async()=>{const m=$('#rMic');
    say(target);$('#rNext').hidden=false;$('#rState').textContent='';}
   catch(e){$('#rResult').innerHTML=`<p class="msg err">${esc(e.message)}</p>`;}
   m.className='mic smallmic';return;}
- try{rv.rec=new Rec();await rv.rec.start();m.className='mic smallmic rec';$('#rState').textContent='Je t\'écoute… appuie pour valider';}catch(e){rv.rec=null;$('#rResult').innerHTML=`<p class="msg err">${esc(e.message)}</p>`;}};
+ try{beginPractice();rv.rec=new Rec();await rv.rec.start();m.className='mic smallmic rec';$('#rState').textContent='Je t\'écoute… appuie pour valider';}catch(e){rv.rec=null;$('#rResult').innerHTML=`<p class="msg err">${esc(e.message)}</p>`;}};
 $('#rNext').onclick=()=>{rv.i++;if(rv.i>=rv.list.length||Date.now()>rv.end)finishReview();else showCard();};
 $('#rToChat').onclick=()=>{clearInterval(rv.timer);rv.active=false;flowMark(1);openChat(false,null,{resume:true});};
 
@@ -254,11 +264,11 @@ function line(svg,vals,color,minY,maxY){const W=300,H=110,pts=vals.map((v,i)=>v=
  if(!pts.length){svg.innerHTML=`<text x="150" y="60" text-anchor="middle" fill="var(--mute)" font-size="12">Pas encore de données</text>`;return;}
  svg.innerHTML=`<polyline fill="none" stroke="${color}" stroke-width="3" stroke-linejoin="round" stroke-linecap="round" points="${pts.map(p=>p.join(',')).join(' ')}"/>`+pts.map(p=>`<circle cx="${p[0]}" cy="${p[1]}" r="3.5" fill="${color}"/>`).join('');}
 const LV=['A1','A2','B1','B2','C1','C2'];
-function renderStats(){const d14=lastDays(14);const min=d14.map(([,d])=>Math.round(d.secs/60));bars($('#cMin'),min,'var(--accent)');
+function renderStats(){const d14=lastDays(14);const min=d14.map(([,d])=>Math.round(CoachLogic.practiceSecs(d)/60));bars($('#cMin'),min,'var(--accent)');
  $('#lMin').innerHTML=`<span>${d14[0][0].slice(5)}</span><span>aujourd'hui</span>`;
  line($('#cWpm'),d14.map(([,d])=>d.secs>20?Math.round(d.words/(d.secs/60)):null),'var(--good)',0,Math.max(60,...d14.map(([,d])=>d.secs>20?d.words/(d.secs/60):0)));
  line($('#cErr'),d14.map(([,d])=>d.words>10?+(d.errors/d.words*100).toFixed(1):null),'var(--rec)',0,Math.max(5,...d14.map(([,d])=>d.words>10?d.errors/d.words*100:0)));
- $('#sMin').textContent=lastDays(7).reduce((a,[,d])=>a+d.secs,0)/60|0;$('#sStreak').textContent=streak();$('#sCards').textContent=cards.length;$('#sVocab').textContent=vocab.size;
+ $('#sMin').textContent=lastDays(7).reduce((a,[,d])=>a+CoachLogic.practiceSecs(d),0)/60|0;$('#sStreak').textContent=streak();$('#sCards').textContent=cards.length;$('#sVocab').textContent=vocab.size;
  const w7=lastDays(7),tot=w7.reduce((a,[,d])=>a+d.words,0),u=new Set(w7.flatMap(([,d])=>d.uniq||[]));$('#sTtr').textContent=tot>30?Math.round(u.size/tot*100)+'%':'–';
  const wk={};levels.forEach(x=>{const dt=new Date(x.d);dt.setDate(dt.getDate()-((dt.getDay()+6)%7));const k=today(dt);(wk[k]=wk[k]||[]).push(LV.indexOf(x.l));});
  const ks=Object.keys(wk).sort().slice(-8),vals=ks.map(k=>{const a=wk[k].sort((x,y)=>x-y);return a[a.length>>1];});
@@ -279,7 +289,7 @@ $('#icsBtn').onclick=e=>{e.preventDefault();const ics=['BEGIN:VCALENDAR','VERSIO
  const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([ics],{type:'text/calendar'}));a.download='english-coach.ics';a.click();};
 
 function paintProfiles(){const stats=CoachLogic.profileStats(CoachLogic.snapshot(localStorage));stats.forEach(s=>{const el=document.querySelector('[data-p="'+s.id+'"] .pdata');if(el)el.textContent=s.hasData?(s.cards+' carte'+(s.cards>1?'s':'')+' · '+s.minutes+' min'+(s.messages?' · '+s.messages+' msg':'')):'Pas encore de données ici';});
- const hint=$('#transferHint');if(!hint)return;const any=stats.some(s=>s.hasData);hint.hidden=any;if(!any)hint.textContent='Aucun progrès dans ce raccourci. Si l’ancien raccourci a encore tes données, ne le supprime pas. Quand il affiche la version 9, exporte la copie et importe-la ici.';}
+ const hint=$('#transferHint');if(!hint)return;const any=stats.some(s=>s.hasData);hint.hidden=any;if(!any)hint.textContent='Aucun progrès dans ce raccourci. Si l’ancien raccourci a encore tes données, ne le supprime pas. Quand il affiche la version '+CoachLogic.APP_VERSION+', exporte la copie et importe-la ici.';}
 function downloadJson(name,obj){const blob=new Blob([JSON.stringify(obj)],{type:'application/json'});const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(a.href),2000);}
 async function shareOrDownload(name,obj){const blob=new Blob([JSON.stringify(obj)],{type:'application/json'});const file=new File([blob],name,{type:'application/json'});
  if(navigator.share&&navigator.canShare&&navigator.canShare({files:[file]})){try{await navigator.share({files:[file],title:'English Coach'});return;}catch(e){if(e&&e.name==='AbortError')return;}}
@@ -307,7 +317,9 @@ const buildInfo=$('#buildInfo');if(buildInfo)buildInfo.textContent='Version '+Co
 $('#meBtn').textContent=ME.ini;$('#meBtn').className='av '+(PROF||'tom');$('#meBtn').onclick=switchProfile;
 $$('#profiles [data-p]').forEach(b=>b.onclick=()=>pickProfile(b.dataset.p));
 $('#profiles').hidden=!!PROF;
+syncClock(document.visibilityState!=='hidden');
 paintProfiles();
+const sessionCtl=$('#sessionCtl');if(sessionCtl)sessionCtl.onclick=()=>{if(clock&&clock.active)pausePractice();else beginPractice();};
 syncSettings();syncLookup();refreshHome();renderThread();
 if(location.hash.startsWith('#demo')&&location.hash!=='#demo-profiles'){document.head.insertAdjacentHTML('beforeend','<style>*{animation-duration:0s!important;animation-delay:0s!important;transition:none!important}</style>');
  const v=location.hash.slice(6).split('@')[0]||'home';const t0=new Date();

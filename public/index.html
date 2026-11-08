@@ -13,12 +13,13 @@
  <p class="pnote">Chaque profil a sa propre progression, dans ce raccourci. Un ancien raccourci peut encore avoir les données : ne le supprime pas.</p></div></div>
 <section class="view on" id="v-home"><div class="scroll">
  <div class="ringwrap"><svg width="230" height="230" viewBox="0 0 230 230"><circle cx="115" cy="115" r="100" fill="none" stroke="var(--line)" stroke-width="16"/><circle id="ring" cx="115" cy="115" r="100" fill="none" stroke="url(#rg)" stroke-width="16" stroke-linecap="round" transform="rotate(-90 115 115)" stroke-dasharray="628.3" stroke-dashoffset="628.3" style="transition:stroke-dashoffset 1s cubic-bezier(.2,.8,.2,1)"/><defs><linearGradient id="rg"><stop offset="0" stop-color="#5ac8fa"/><stop offset="1" stop-color="#0a84ff"/></linearGradient></defs></svg>
-  <div class="lbl"><div class="big" id="todayMin">0</div><div class="sm" id="goalLbl">/ 15 min aujourd'hui</div></div></div>
+  <div class="lbl"><div class="big" id="todayMin">0</div><div class="sm" id="goalLbl">/ 15 min de séance</div></div></div>
  <div style="text-align:center;margin-bottom:16px"><span class="pill">🔥 <b id="streak">0</b>&nbsp;jour(s) de suite</span></div>
  <div class="flow"><i id="f1">Révision</i>→<i id="f2">Conversation</i>→<i id="f3">Bilan</i></div>
  <button class="btn" id="startSession">Commencer la session</button>
  <button class="btn sec" id="freeTalk">Conversation libre</button>
  <button class="btn sec" id="pressureBtn">🎯 Mode pression</button>
+ <button class="btn sec" type="button" id="sessionCtl" hidden>Pause</button>
  <h3>Aujourd'hui</h3>
  <div class="row"><div class="stat"><b id="hDue">0</b><span>cartes à revoir</span></div><div class="stat"><b id="hWpm">–</b><span>mots / min</span></div><div class="stat"><b id="hLvl">B1</b><span>niveau estimé</span></div></div>
  <p class="fine" id="persistNote" style="text-align:center;margin-top:14px"></p>
@@ -43,7 +44,7 @@
 <section class="view" id="v-stats"><div class="scroll">
  <h2 style="margin-top:8px">Progrès</h2>
  <div class="row" style="margin-top:12px"><div class="stat"><b id="sMin">0</b><span>min cette semaine</span></div><div class="stat"><b id="sStreak">0</b><span>série 🔥</span></div><div class="stat"><b id="sCards">0</b><span>cartes</span></div></div>
- <h3>Minutes parlées · 14 jours</h3><div class="card"><svg class="chart" id="cMin"></svg><div class="legend" id="lMin"></div></div>
+ <h3>Minutes de séance · 14 jours</h3><div class="card"><svg class="chart" id="cMin"></svg><div class="legend" id="lMin"></div></div>
  <h3>Mots par minute</h3><div class="card"><svg class="chart" id="cWpm"></svg></div>
  <h3>Erreurs pour 100 mots</h3><div class="card"><svg class="chart" id="cErr"></svg></div>
  <h3>Vocabulaire</h3><div class="row"><div class="stat"><b id="sVocab">0</b><span>mots différents utilisés</span></div><div class="stat"><b id="sTtr">–</b><span>variété (7 j)</span></div></div>
