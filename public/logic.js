@@ -69,7 +69,7 @@
     return Object.keys(out).length ? out : null;
   }
 
-  function normalizeThread(list) {
+  function normalizeThread(list, cap) {
     if (!Array.isArray(list)) return [];
     const out = [];
     for (const m of list) {
@@ -94,7 +94,8 @@
       }
       out.push(item);
     }
-    return out.slice(-THREAD_CAP);
+    const lim = cap == null ? THREAD_CAP : cap;
+    return lim > 0 ? out.slice(-lim) : [];
   }
 
   function appendMessage(thread, msg) {
@@ -184,6 +185,7 @@
       if (asked.length) x += '\n\n# Already asked — do not ask these again or lightly rephrase them:\n- ' + asked.join('\n- ');
       if (c.hasThread) x += '\nIf the talk is looping, bring one concrete new situation (a place, a choice, or a short role-play). Do not invent memories or fresh facts that are not in the conversation or the learner memory.';
     }
+    if (c.journal) x += '\n\n' + String(c.journal).slice(0, 8000);
     x += '\n\n# Tone reminder\nFriend to friend, same age. No stock praise. Do not say Wow, incredible, awesome, or great response. React to what was just said, then one question.';
     return x;
   }
@@ -286,7 +288,8 @@
   }
 
   const LEGACY_KEYS = ['settings', 'sid', 'days', 'vocab', 'levels', 'cards', 'flow', 'demoSeeded'];
-  const APP_VERSION = 10;
+  const APP_VERSION = 11;
+  const ARCHIVE_CAP = 500;
   const SESSION_MAX_GAP_MS = 90000;
   const SKIP_ON_IMPORT = { profile: 1 };
 
@@ -522,11 +525,108 @@
     return +day.secs || 0;
   }
 
-  function voiceInstructions(accentPhrase) {
+  function parisDate(ts) {
+    const d = new Date(ts);
+    if (Number.isNaN(d.getTime())) return '';
+    return new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Paris', year: 'numeric', month: '2-digit', day: '2-digit' }).format(d);
+  }
+
+  function shiftDate(iso, days) {
+    const parts = String(iso || '').split('-').map(Number);
+    if (parts.length !== 3 || parts.some(n => !n)) return '';
+    const dt = new Date(Date.UTC(parts[0], parts[1] - 1, parts[2]));
+    dt.setUTCDate(dt.getUTCDate() + days);
+    return dt.toISOString().slice(0, 10);
+  }
+
+  function parisYesterday(now) {
+    return shiftDate(parisDate(now), -1);
+  }
+
+  function combineHistory(archive, thread) {
+    return normalizeThread([].concat(archive || [], thread || []), ARCHIVE_CAP + THREAD_CAP);
+  }
+
+  function splitHistory(archive, thread) {
+    const all = combineHistory(archive, thread);
+    const cut = Math.max(0, all.length - THREAD_CAP);
+    return { archive: all.slice(0, cut), thread: all.slice(cut) };
+  }
+
+  function datedModelMessages(items) {
+    const stamped = [];
+    for (const m of normalizeThread(items, ARCHIVE_CAP + THREAD_CAP)) {
+      const prefix = m.at ? '[' + parisDate(m.at) + '] ' : '[undated] ';
+      stamped.push({ role: m.role, text: prefix + m.text });
+    }
+    return toModelMessages(stamped);
+  }
+
+  function memoryBrief(items, now, notes) {
+    const list = normalizeThread(items, ARCHIVE_CAP + THREAD_CAP);
+    const today = parisDate(now || Date.now());
+    const yesterday = parisYesterday(now || Date.now());
+    const days = {};
+    const undated = [];
+    for (const m of list) {
+      if (!m.at) { undated.push(m); continue; }
+      const day = parisDate(m.at);
+      if (!day) { undated.push(m); continue; }
+      (days[day] = days[day] || []).push(m);
+    }
+    const dates = Object.keys(days).sort();
+    let x = '# Dated conversation log (Europe/Paris)\nToday is ' + today + '. Yesterday was ' + yesterday + '.\n';
+    x += 'Days with stored turns: ' + (dates.length ? dates.join(', ') : 'none') + '.\n';
+    x += 'Use a day only if it is listed. If they ask about a day that is not listed, say you do not have that day. Do not invent lines, and do not move an undated note onto a date.\n';
+    for (const day of dates) {
+      const label = day === today ? ' (today)' : day === yesterday ? ' (yesterday)' : '';
+      const take = (day === today || day === yesterday) ? days[day].slice(-12) : days[day].slice(0, 3);
+      const lines = take.map(m => (m.role === 'me' ? 'Learner' : 'Coach') + ': ' + m.text.replace(/\s+/g, ' ').slice(0, 180));
+      x += '\n' + day + label + ':\n' + lines.join('\n') + '\n';
+    }
+    if (undated.length) {
+      x += '\nUndated lines (no timestamp, not a calendar day):\n';
+      undated.slice(-6).forEach(m => { x += (m.role === 'me' ? 'Learner' : 'Coach') + ': ' + m.text.replace(/\s+/g, ' ').slice(0, 160) + '\n'; });
+    }
+    const mem = normalizeMemory(notes).slice(-12);
+    if (mem.length) x += '\nUndated learner notes (not tied to a day):\n- ' + mem.map(n => n.text).join('\n- ') + '\n';
+    return x.slice(0, 8000);
+  }
+
+  function memoryStatus(items, now) {
+    const today = parisDate(now || Date.now());
+    const yesterday = parisYesterday(now || Date.now());
+    const days = {};
+    let undated = 0;
+    for (const m of normalizeThread(items, ARCHIVE_CAP + THREAD_CAP)) {
+      if (!m.at) { undated++; continue; }
+      const day = parisDate(m.at);
+      if (!day) { undated++; continue; }
+      days[day] = (days[day] || 0) + 1;
+    }
+    const dates = Object.keys(days).sort();
+    const yCount = days[yesterday] || 0;
+    const summary = dates.length
+      ? (dates.length + ' jour(s) daté(s). Hier (' + yesterday + ') : ' + (yCount ? yCount + ' tour(s)' : 'aucun tour') + '. Sans date : ' + undated + '.')
+      : ('Aucun tour daté. Hier (' + yesterday + ') ne peut pas être reconstitué. Sans date : ' + undated + '.');
+    return { today, yesterday, dates, yesterdayCount: yCount, undated, summary };
+  }
+
+  function speechRequest(opts) {
+    const o = opts || {};
+    const model = o.model || 'gpt-4o-mini-tts';
+    const text = String(o.text || '').slice(0, 4000);
+    const body = { model, voice: o.voice || 'marin', input: text, response_format: 'mp3' };
+    if (String(model).indexOf('gpt-4o') >= 0) body.instructions = voiceInstructions(o.accentPhrase || 'a natural General American accent', text);
+    return body;
+  }
+
+  function voiceInstructions(accentPhrase, phrase) {
     return 'Voice: one adult friend in their late twenties, ' + accentPhrase + ', talking in a quiet room. Not a narrator, teacher, announcer, or character.\n' +
       'Delivery: this clip continues the same reply. Do not reset to a new greeting. Use contractions. Leave a short breath between sentences, not a long pause.\n' +
       'Melody: ordinary speech. A question lifts a little at the end. A correction is only a shade slower on the repaired words, then back to the same pace.\n' +
-      'Energy: even and interested, not a cheerleader. No laugh, no whisper, no theatrical drop. Do not sound impressed.';
+      'Energy: even and interested, not a cheerleader. No laugh, no whisper, no theatrical drop. Do not sound impressed.\n' +
+      (/\?\s*$/.test(String(phrase || '').trim()) ? 'This phrase is a question.' : 'This phrase continues the same reply.');
   }
 
   function unclearSpeech(text) {
@@ -593,6 +693,7 @@
     profileId, storageKey, wipe, safeHttpUrl, cleanExcerpt, slimMeta,
     recoverLegacy, snapshot, parseTransfer, planImport, applyImport, profileStats,
     recentQuestions, shouldContinueAloud, replyOpenings, unclearSpeech, createPhraseGrouper,
+    parisDate, parisYesterday, combineHistory, splitHistory, datedModelMessages, memoryBrief, memoryStatus, speechRequest, ARCHIVE_CAP,
     tickSession, startSession, pauseSession, noteSessionSecs, practiceSecs, SESSION_MAX_GAP_MS,
     normalizeThread, appendMessage, toModelMessages, conversationForApi,
     normalizeMemory, mergeMemory, sessionAddendum, openingKind, openingText,
