@@ -9,7 +9,7 @@ Tests: `npm test` (no API keys).
 
 Conversations, learner notes, review cards, and settings are in `localStorage`, one namespace per profile (`p:tom:…`, `p:chloe:…`, `p:sophie:…`). Reloading or closing the browser restores the thread, and the next turn sends that thread to Claude so the reply continues it. Sophie starts blank: nothing is copied from Tom or Chloé. The old v6 migration still moves only pre-profile keys onto Tom.
 
-This is the same browser on the same device. It is not an account and it does not sync to another phone. The Render service has no database; its memory is only a cache rebuilt from the phone on each turn, and the free disk is ephemeral. Nothing here copies existing cards or settings into a new store.
+This is one home-screen shortcut, or one browser, on one device. It is not an account. On iPhone and iPad, a new home-screen shortcut does not see the data of the previous shortcut, even at the same address. Do not delete the old shortcut. When it shows version 9, use Réglages → Exporter, then Importer on the new shortcut. The import adds and merges; it does not delete either side. The Render service has no database.
 
 "Nouveau", or Réglages → Conversation → Effacer, clears that profile's transcript only. Réglages → Notes du coach clears remembered facts. Cards, mistakes, streaks, and settings stay until you remove them yourself.
 

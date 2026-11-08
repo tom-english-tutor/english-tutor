@@ -83,10 +83,9 @@ test('sophie is a third profile and never shares storage with Tom or Chloé', ()
   assert.match(sysFor({ accent: 'us' }), /Taïa/);
 
   const app = fs.readFileSync(path.join(root, 'public/app.js'), 'utf8');
-  const migration = app.slice(0, app.indexOf('const DEMO_P'));
-  assert.match(migration, /migratedV6/);
-  assert.match(migration, /p:tom:/);
-  assert.doesNotMatch(migration, /p:sophie:|p:chloe:/);
+  const boot = app.slice(0, app.indexOf('const DEMO_P'));
+  assert.match(boot, /recoverLegacy\(localStorage\)/);
+  assert.doesNotMatch(boot, /removeItem/);
   const html = fs.readFileSync(path.join(root, 'public/index.html'), 'utf8');
   for (const id of logic.PROFILE_IDS) assert.match(html, new RegExp('data-p="' + id + '"'));
   assert.match(html, /Sophie/);
@@ -298,7 +297,7 @@ test('health and context routes keep two profiles apart and do not enable billed
   const port = app.address().port;
   try {
     const health = await (await fetch('http://127.0.0.1:' + port + '/api/health')).json();
-    assert.equal(health.version, 8);
+    assert.equal(health.version, 9);
     assert.deepEqual(health.profiles, ['tom', 'chloe', 'sophie']);
     assert.equal(health.persistence, 'device-local');
     assert.equal(health.search, 'reference');

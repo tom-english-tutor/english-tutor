@@ -1,6 +1,7 @@
 {
   "name": "English Coach",
   "short_name": "Coach",
+  "id": "/",
   "start_url": "/",
   "display": "standalone",
   "background_color": "#000000",
