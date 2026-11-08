@@ -2,7 +2,8 @@
 const $=s=>document.querySelector(s),$$=s=>[...document.querySelectorAll(s)];
 /* ---------- profiles ---------- */
 const PROFILES={tom:{name:'Tom',ini:'T',lvl:'B1',g:'m'},chloe:{name:'Chloé',ini:'C',lvl:'?',g:'f'},sophie:{name:'Sophie',ini:'S',lvl:'?',g:'f'}};
-(()=>{if(localStorage.getItem('migratedV6'))return;['settings','sid','days','vocab','levels','cards','flow','demoSeeded'].forEach(k=>{const v=localStorage.getItem(k);if(v!=null&&localStorage.getItem('p:tom:'+k)==null)localStorage.setItem('p:tom:'+k,v);if(v!=null)localStorage.removeItem(k);});localStorage.setItem('migratedV6','1');})();
+try{CoachLogic.recoverLegacy(localStorage);}catch(e){}
+if('serviceWorker' in navigator){navigator.serviceWorker.register('/sw.js').then(r=>r.update()).catch(()=>{});}
 const DEMO_P=(location.hash.match(/^#demo-\w+@(\w+)/)||[])[1];
 let PROF=DEMO_P||localStorage.getItem('profile');if(!PROFILES[PROF]||location.hash==='#demo-profiles')PROF=null;
 const ME=PROFILES[PROF]||PROFILES.tom;const NS='p:'+(PROF||'_')+':';
@@ -277,10 +278,36 @@ const lookupBtn=$('#lookupBtn');if(lookupBtn)lookupBtn.onclick=()=>{lookupOnce=!
 $('#icsBtn').onclick=e=>{e.preventDefault();const ics=['BEGIN:VCALENDAR','VERSION:2.0','PRODID:-//English Coach//FR','BEGIN:VEVENT','UID:english-coach-daily@coach','DTSTAMP:20260101T000000Z','DTSTART;TZID=Europe/Paris:20260101T190000','DURATION:PT15M','RRULE:FREQ=DAILY','SUMMARY:🎙️ English Coach — '+S.goal+' min','URL:'+location.origin,'BEGIN:VALARM','ACTION:DISPLAY','DESCRIPTION:English Coach','TRIGGER:PT0M','END:VALARM','END:VEVENT','END:VCALENDAR'].join('\r\n');
  const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([ics],{type:'text/calendar'}));a.download='english-coach.ics';a.click();};
 
+function paintProfiles(){const stats=CoachLogic.profileStats(CoachLogic.snapshot(localStorage));stats.forEach(s=>{const el=document.querySelector('[data-p="'+s.id+'"] .pdata');if(el)el.textContent=s.hasData?(s.cards+' carte'+(s.cards>1?'s':'')+' · '+s.minutes+' min'+(s.messages?' · '+s.messages+' msg':'')):'Pas encore de données ici';});
+ const hint=$('#transferHint');if(!hint)return;const any=stats.some(s=>s.hasData);hint.hidden=any;if(!any)hint.textContent='Aucun progrès dans ce raccourci. Si l’ancien raccourci a encore tes données, ne le supprime pas. Quand il affiche la version 9, exporte la copie et importe-la ici.';}
+function downloadJson(name,obj){const blob=new Blob([JSON.stringify(obj)],{type:'application/json'});const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(a.href),2000);}
+async function shareOrDownload(name,obj){const blob=new Blob([JSON.stringify(obj)],{type:'application/json'});const file=new File([blob],name,{type:'application/json'});
+ if(navigator.share&&navigator.canShare&&navigator.canShare({files:[file]})){try{await navigator.share({files:[file],title:'English Coach'});return;}catch(e){if(e&&e.name==='AbortError')return;}}
+ downloadJson(name,obj);}
+let importPlan=null;
+function renderImport(plan,parsed){const box=$('#importPreview');if(!box)return;importPlan=plan;const bits=[];
+ if(parsed.origin&&parsed.origin!==location.origin)bits.push('<div>Ce fichier vient de '+esc(parsed.origin)+'.</div>');
+ const shown=plan.actions.filter(a=>a.op==='add'||a.op==='merge'||a.op==='conflict');
+ if(!shown.length)bits.push('<div>Rien de nouveau à ajouter. Les données déjà ici restent.</div>');
+ shown.forEach(a=>{
+  if(a.op==='conflict')bits.push('<label class="set">'+esc(a.preview)+' <select data-import-key="'+esc(a.key)+'"><option value="current">Garder ce raccourci</option><option value="incoming">Prendre l’ancien</option></select></label>');
+  else bits.push('<div>'+esc(a.preview)+'</div>');
+ });
+ bits.push('<button class="btn" type="button" id="applyImport" style="margin-top:12px">Ajouter cette copie</button>');
+ box.innerHTML=bits.join('');
+ const btn=$('#applyImport');if(btn)btn.onclick=()=>{const choices={};box.querySelectorAll('[data-import-key]').forEach(s=>{choices[s.dataset.importKey]=s.value;});
+  const backup=CoachLogic.snapshot(localStorage);downloadJson('english-coach-avant-import.json',{app:'english-coach',exportedAt:new Date().toISOString(),origin:location.origin,version:CoachLogic.APP_VERSION,keys:backup});
+  CoachLogic.applyImport(localStorage,plan,choices);location.reload();};}
+const exportBtn=$('#exportBtn');if(exportBtn)exportBtn.onclick=()=>{const keys=CoachLogic.snapshot(localStorage);shareOrDownload('english-coach-copie.json',{app:'english-coach',exportedAt:new Date().toISOString(),origin:location.origin,version:CoachLogic.APP_VERSION,standalone:matchMedia('(display-mode: standalone)').matches||navigator.standalone===true,keys});};
+const importFile=$('#importFile');if(importFile)importFile.onchange=async()=>{const file=importFile.files&&importFile.files[0];importFile.value='';if(!file)return;const parsed=CoachLogic.parseTransfer(await file.text());const box=$('#importPreview');
+ if(!parsed.ok){if(box)box.textContent=parsed.error;return;}renderImport(CoachLogic.planImport(CoachLogic.snapshot(localStorage),parsed.keys),parsed);};
+const buildInfo=$('#buildInfo');if(buildInfo)buildInfo.textContent='Version '+CoachLogic.APP_VERSION+' dans ce raccourci.';
+
 /* ---------- boot ---------- */
 $('#meBtn').textContent=ME.ini;$('#meBtn').className='av '+(PROF||'tom');$('#meBtn').onclick=switchProfile;
 $$('#profiles [data-p]').forEach(b=>b.onclick=()=>pickProfile(b.dataset.p));
 $('#profiles').hidden=!!PROF;
+paintProfiles();
 syncSettings();syncLookup();refreshHome();renderThread();
 if(location.hash.startsWith('#demo')&&location.hash!=='#demo-profiles'){document.head.insertAdjacentHTML('beforeend','<style>*{animation-duration:0s!important;animation-delay:0s!important;transition:none!important}</style>');
  const v=location.hash.slice(6).split('@')[0]||'home';const t0=new Date();

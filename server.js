@@ -119,7 +119,7 @@ async function azurePron(wav,ref){
 const TYPES={'.html':'text/html; charset=utf-8','.webmanifest':'application/manifest+json','.png':'image/png','.svg':'image/svg+xml','.js':'text/javascript; charset=utf-8','.css':'text/css'};
 function createApp(){return http.createServer(async(req,res)=>{try{
  const u=new URL(req.url,'http://x'),q=u.searchParams,sid=q.get('sid')||'default',P=u.pathname;
- if(P==='/api/health'){const mode=searchLib.searchMode(process.env);return json(res,200,{ok:true,version:8,hasKey:!!KEY,model:MODEL,tts:!!OKEY,ttsModel:TTS_MODEL,sttModel:STT_MODEL,pron:!!(AZ_KEY&&AZ_REGION),accents:Object.keys(ACCENTS),profiles:logic.PROFILE_IDS,search:mode,searchNote:logic.SEARCH_NOTE[mode]||logic.SEARCH_BLOCKER,persistence:'device-local'});}
+ if(P==='/api/health'){const mode=searchLib.searchMode(process.env);return json(res,200,{ok:true,version:logic.APP_VERSION,hasKey:!!KEY,model:MODEL,tts:!!OKEY,ttsModel:TTS_MODEL,sttModel:STT_MODEL,pron:!!(AZ_KEY&&AZ_REGION),accents:Object.keys(ACCENTS),profiles:logic.PROFILE_IDS,search:mode,searchNote:logic.SEARCH_NOTE[mode]||logic.SEARCH_BLOCKER,persistence:'device-local'});}
  if(P==='/api/context'&&req.method==='POST'){const b=await jbody(req);if(b.profile!=null&&b.profile!==''&&!logic.profileId(b.profile))return json(res,400,{error:'profil inconnu'});const h=logic.toModelMessages(b.history||[]);sessions.set(sid,h);return json(res,200,{ok:true,turns:h.length,profile:logic.profileId(b.profile)});}
  if(P==='/api/reset'&&req.method==='POST'){sessions.delete(sid);return json(res,200,{ok:true});}
  if(P==='/api/tts'&&req.method==='POST'){const b=await jbody(req);
@@ -173,7 +173,8 @@ function createApp(){return http.createServer(async(req,res)=>{try{
    messages:[{role:'user',content:'Conversation:\n'+(h||'(vide)')+'\n\nStats: '+JSON.stringify(b.stats||{})}]});return json(res,200,{recap});}catch(e){return json(res,502,{error:e.message});}}
  const pub=path.join(__dirname,'public');let f=path.join(pub,P==='/'?'index.html':P==='/favicon.ico'?'favicon-32.png':path.normalize(P));
  if(!f.startsWith(pub)||!fs.existsSync(f)||fs.statSync(f).isDirectory()){res.writeHead(404);return res.end();}
- res.writeHead(200,{'Content-Type':TYPES[path.extname(f)]||'application/octet-stream','Cache-Control':'no-cache'});fs.createReadStream(f).pipe(res);
+ const ext=path.extname(f);const fresh=ext==='.html'||ext==='.js'||ext==='.css'||ext==='.webmanifest'||P==='/'||P==='/sw.js';
+ res.writeHead(200,{'Content-Type':TYPES[ext]||'application/octet-stream','Cache-Control':fresh?'no-store':'no-cache'});fs.createReadStream(f).pipe(res);
 }catch(e){console.error(e);json(res,500,{error:String(e.message||e)});}});}
 if(require.main===module) createApp().listen(PORT,'0.0.0.0',()=>console.log('listening',PORT));
 module.exports={createApp,sessions,sysFor};

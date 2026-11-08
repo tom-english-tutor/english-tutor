@@ -250,6 +250,205 @@
     return PRAISE.filter(p => p.re.test(t)).map(p => p.id);
   }
 
+  const LEGACY_KEYS = ['settings', 'sid', 'days', 'vocab', 'levels', 'cards', 'flow', 'demoSeeded'];
+  const APP_VERSION = 9;
+  const SKIP_ON_IMPORT = { profile: 1 };
+
+  function recoverLegacy(storage) {
+    const copied = [];
+    if (!storage || typeof storage.getItem !== 'function') return { copied };
+    for (const key of LEGACY_KEYS) {
+      const raw = storage.getItem(key);
+      const dest = 'p:tom:' + key;
+      if (raw == null || storage.getItem(dest) != null) continue;
+      storage.setItem(dest, raw);
+      copied.push(dest);
+    }
+    if (storage.getItem('migratedV6') == null) storage.setItem('migratedV6', '1');
+    return { copied };
+  }
+
+  function snapshot(storage) {
+    const out = {};
+    if (!storage || typeof storage.getItem !== 'function' || typeof storage.key !== 'function') return out;
+    const n = storage.length || 0;
+    for (let i = 0; i < n; i++) {
+      const key = storage.key(i);
+      if (key == null) continue;
+      const raw = storage.getItem(key);
+      if (typeof raw === 'string') out[key] = raw;
+    }
+    return out;
+  }
+
+  function parseTransfer(text) {
+    let data;
+    try { data = JSON.parse(String(text || '')); } catch (e) { return { ok: false, error: 'Fichier illisible.' }; }
+    if (!data || data.app !== 'english-coach' || !data.keys || typeof data.keys !== 'object') return { ok: false, error: 'Ce fichier n’est pas une copie English Coach.' };
+    const keys = {};
+    for (const key of Object.keys(data.keys)) {
+      if (!/^[\w:._-]{1,80}$/.test(key)) continue;
+      const raw = data.keys[key];
+      if (typeof raw !== 'string' || raw.length > 2000000) continue;
+      keys[key] = raw;
+    }
+    return { ok: true, keys, origin: typeof data.origin === 'string' ? data.origin : '', version: data.version || 0 };
+  }
+
+  function parseRaw(raw) {
+    try { return JSON.parse(raw); } catch (e) { return undefined; }
+  }
+
+  function unionById(list) {
+    const map = new Map();
+    for (const item of list) {
+      if (!item || item.id == null) continue;
+      const id = String(item.id);
+      const prev = map.get(id);
+      if (!prev) { map.set(id, item); continue; }
+      map.set(id, Object.assign({}, prev, item, {
+        reps: Math.max(+prev.reps || 0, +item.reps || 0),
+        ef: Math.max(+prev.ef || 0, +item.ef || 0),
+        due: Math.max(+prev.due || 0, +item.due || 0)
+      }));
+    }
+    return [...map.values()];
+  }
+
+  function unionDays(a, b) {
+    const out = {};
+    const days = new Set([...Object.keys(a || {}), ...Object.keys(b || {})]);
+    for (const day of days) {
+      const x = a && a[day], y = b && b[day];
+      if (!x || !y) { out[day] = x || y; continue; }
+      out[day] = {
+        secs: Math.max(+x.secs || 0, +y.secs || 0),
+        words: Math.max(+x.words || 0, +y.words || 0),
+        errors: Math.max(+x.errors || 0, +y.errors || 0),
+        turns: Math.max(+x.turns || 0, +y.turns || 0),
+        uniq: [...new Set([...(x.uniq || []), ...(y.uniq || [])])].slice(0, 3000)
+      };
+    }
+    return out;
+  }
+
+  function unionThread(a, b) {
+    const seen = new Set();
+    const items = [...(Array.isArray(a) ? a : []), ...(Array.isArray(b) ? b : [])].filter(m => m && m.text);
+    items.sort((x, y) => (+x.at || 0) - (+y.at || 0));
+    const out = [];
+    for (const m of items) {
+      const id = (m.role || '') + '|' + m.text;
+      if (seen.has(id)) continue;
+      seen.add(id);
+      out.push(m);
+    }
+    return out.slice(-40);
+  }
+
+  function unionMemory(a, b) {
+    return normalizeMemory([...(Array.isArray(a) ? a : []), ...(Array.isArray(b) ? b : [])]);
+  }
+
+  function unionLevels(a, b) {
+    const seen = new Set();
+    const out = [];
+    for (const item of [...(Array.isArray(a) ? a : []), ...(Array.isArray(b) ? b : [])]) {
+      if (!item || !item.d || !item.l) continue;
+      const id = item.d + '|' + item.l;
+      if (seen.has(id)) continue;
+      seen.add(id);
+      out.push({ d: item.d, l: item.l });
+    }
+    return out.slice(-500);
+  }
+
+  function unionFlow(a, b) {
+    const out = {};
+    for (const day of new Set([...Object.keys(a || {}), ...Object.keys(b || {})])) {
+      out[day] = Math.max(+((a || {})[day]) || 0, +((b || {})[day]) || 0);
+    }
+    return out;
+  }
+
+  function unionVocab(a, b) {
+    return [...new Set([...(Array.isArray(a) ? a : []), ...(Array.isArray(b) ? b : [])].map(x => String(x)))].slice(-20000);
+  }
+
+  function mergeRaw(key, currentRaw, incomingRaw) {
+    const kind = key.split(':').pop();
+    const cur = parseRaw(currentRaw);
+    const inc = parseRaw(incomingRaw);
+    if (cur === undefined || inc === undefined) return null;
+    let merged;
+    if (kind === 'cards') merged = unionById([...(Array.isArray(cur) ? cur : []), ...(Array.isArray(inc) ? inc : [])]);
+    else if (kind === 'days') merged = unionDays(cur, inc);
+    else if (kind === 'thread') merged = unionThread(cur, inc);
+    else if (kind === 'memory') merged = unionMemory(cur, inc);
+    else if (kind === 'levels') merged = unionLevels(cur, inc);
+    else if (kind === 'flow') merged = unionFlow(cur, inc);
+    else if (kind === 'vocab') merged = unionVocab(cur, inc);
+    else return null;
+    return JSON.stringify(merged);
+  }
+
+  function planImport(current, incoming) {
+    const actions = [];
+    const cur = current || {};
+    const inc = incoming || {};
+    const keys = new Set([...Object.keys(cur), ...Object.keys(inc)]);
+    for (const key of keys) {
+      if (SKIP_ON_IMPORT[key]) {
+        actions.push({ key, op: 'skip', preview: 'Profil affiché : inchangé.' });
+        continue;
+      }
+      const hasCur = Object.prototype.hasOwnProperty.call(cur, key);
+      const hasInc = Object.prototype.hasOwnProperty.call(inc, key);
+      if (hasInc && !hasCur) actions.push({ key, op: 'add', mergedRaw: inc[key], incomingRaw: inc[key], preview: 'Ajout de ' + key + '.' });
+      else if (hasCur && !hasInc) actions.push({ key, op: 'keep', preview: 'Conservé ici : ' + key + '.' });
+      else if (cur[key] === inc[key]) actions.push({ key, op: 'same', preview: 'Identique : ' + key + '.' });
+      else {
+        const mergedRaw = mergeRaw(key, cur[key], inc[key]);
+        if (mergedRaw != null) actions.push({ key, op: 'merge', mergedRaw, currentRaw: cur[key], incomingRaw: inc[key], preview: 'Fusion sans effacer : ' + key + '.' });
+        else actions.push({ key, op: 'conflict', currentRaw: cur[key], incomingRaw: inc[key], preview: 'Différent : ' + key + '. Rien n’est écrasé sans choix.' });
+      }
+    }
+    return { actions };
+  }
+
+  function applyImport(storage, plan, choices) {
+    const written = [];
+    const pick = choices || {};
+    for (const action of (plan && plan.actions) || []) {
+      let raw = null;
+      if (action.op === 'add' || action.op === 'merge') raw = action.mergedRaw;
+      else if (action.op === 'conflict') {
+        const choice = pick[action.key] || 'current';
+        if (choice === 'incoming') raw = action.incomingRaw;
+        else if (choice === 'merge' && action.mergedRaw) raw = action.mergedRaw;
+        else continue;
+      } else continue;
+      if (typeof raw !== 'string') continue;
+      if (storage.getItem(action.key) === raw) continue;
+      storage.setItem(action.key, raw);
+      written.push(action.key);
+    }
+    return { written };
+  }
+
+  function profileStats(snap) {
+    const data = snap || {};
+    return PROFILE_IDS.map(id => {
+      const cards = parseRaw(data['p:' + id + ':cards']);
+      const days = parseRaw(data['p:' + id + ':days']);
+      const thread = parseRaw(data['p:' + id + ':thread']);
+      const cardN = Array.isArray(cards) ? cards.length : 0;
+      const minutes = days && typeof days === 'object' ? Math.round(Object.keys(days).reduce((sum, day) => sum + (+(days[day] && days[day].secs) || 0), 0) / 60) : 0;
+      const messages = Array.isArray(thread) ? thread.length : 0;
+      return { id, cards: cardN, minutes, messages, hasData: cardN + minutes + messages > 0 };
+    });
+  }
+
   function voiceInstructions(accentPhrase) {
     return 'Voice: a warm, relaxed native English speaker in their late twenties with ' + accentPhrase + ' — a friend talking, not a narrator, announcer, or teacher.\n' +
       'Tone: calm and even, like an equal. Friendly, not bright, not a cheerleader. No performative excitement.\n' +
@@ -258,8 +457,9 @@
   }
 
   return {
-    THREAD_CAP, MEMORY_CAP, SEARCH_BLOCKER, SEARCH_NOTE, PROFILE_IDS, DISCOVERY_IDS,
+    THREAD_CAP, MEMORY_CAP, SEARCH_BLOCKER, SEARCH_NOTE, PROFILE_IDS, DISCOVERY_IDS, LEGACY_KEYS, APP_VERSION,
     profileId, storageKey, wipe, safeHttpUrl, cleanExcerpt, slimMeta,
+    recoverLegacy, snapshot, parseTransfer, planImport, applyImport, profileStats,
     normalizeThread, appendMessage, toModelMessages, conversationForApi,
     normalizeMemory, mergeMemory, sessionAddendum, openingKind, openingText,
     shouldSearch, minimalQuery, lookupPrefix, praiseFlags, voiceInstructions
