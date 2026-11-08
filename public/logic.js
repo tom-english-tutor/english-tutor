@@ -106,7 +106,8 @@
     const out = [];
     for (const m of normalizeThread(thread)) {
       const role = m.role === 'me' ? 'user' : 'assistant';
-      const content = m.text;
+      const content = stripMetadataTokens(m.text).trim();
+      if (!content) continue;
       if (out.length && out[out.length - 1].role === role) out[out.length - 1].content = (out[out.length - 1].content + '\n' + content).slice(0, 4000);
       else out.push({ role, content });
     }
@@ -118,7 +119,7 @@
     const base = [];
     for (const m of Array.isArray(prior) ? prior : []) {
       if (!m || (m.role !== 'user' && m.role !== 'assistant')) continue;
-      const content = String(m.content || m.text || '').trim().slice(0, 4000);
+      const content = stripMetadataTokens(String(m.content || m.text || '')).trim().slice(0, 4000);
       if (!content) continue;
       if (base.length && base[base.length - 1].role === m.role) base[base.length - 1].content = (base[base.length - 1].content + '\n' + content).slice(0, 4000);
       else base.push({ role: m.role, content });
@@ -172,7 +173,7 @@
     if (due.length) x += '\n\n# Spaced-repetition items DUE today — weave 1 of them naturally into this turn when it fits (create a situation where {{NAME}} needs it; don\'t quiz):\n- ' + due.join('\n- ');
     if (recent.length) x += '\n\n# Already taught recently (don\'t re-teach these; if {{NAME}} uses one correctly, just continue — no praise line):\n- ' + recent.join('\n- ');
     const mem = normalizeMemory(c.memory).slice(-12);
-    if (mem.length) x += '\n\n# Learner memory — durable facts from earlier talks. Use one when it fits the moment. Do not recite this list, and do not invent facts that are not here or in the conversation.\n- ' + mem.map(m => m.text).join('\n- ');
+    if (mem.length) x += '\n\n# Learner memory — durable facts from earlier talks. Use one only if they raised that subject. Do not recite this list, do not attach a fact to an unrelated topic, and do not invent facts.\n- ' + mem.map(m => m.text).join('\n- ');
     if (c.level) x += '\n\n# Last estimated level from previous sessions: ' + String(c.level).slice(0, 8);
     const asked = (Array.isArray(c.asked) ? c.asked : []).map(q => String(q || '').replace(/\s+/g, ' ').trim().slice(0, 160)).filter(q => q.length >= 8).slice(-8);
     if (c.anchor) x += '\n\n# This turn\nThey just said: "' + cleanExcerpt(c.anchor).slice(0, 220) + '". Answer that. If it is fragmentary, say you missed it instead of inventing the rest.';
@@ -181,12 +182,12 @@
     if (c.mode === 'pressure') {
       if (asked.length) x += '\n\n# Already asked in this role-play — ask a different question, still in character:\n- ' + asked.join('\n- ');
     } else {
-      if (c.hasThread) x += '\n\n# Continuity\nThe conversation is already underway. Do not greet again, do not restart with how his day was, and do not repeat a question you already asked. Follow the latest thing he said. One new question only. No list of topics.';
+      if (c.hasThread) x += '\n\n# Continuity\nThe conversation is already underway. Do not greet again, do not restart with how his day was, and do not repeat a question you already asked. Answer the subject they just raised. Do not contrast it with an older scene, place, or person. At most one question. No list of topics.';
       if (asked.length) x += '\n\n# Already asked — do not ask these again or lightly rephrase them:\n- ' + asked.join('\n- ');
-      if (c.hasThread) x += '\nIf the talk is looping, bring one concrete new situation (a place, a choice, or a short role-play). Do not invent memories or fresh facts that are not in the conversation or the learner memory.';
+      if (c.hasThread) x += '\nIf the talk is looping, ask one new question about the subject they just raised. Do not pull in an older scene. Do not invent memories or fresh facts that are not in the conversation or the learner memory.';
     }
     if (c.journal) x += '\n\n' + String(c.journal).slice(0, 8000);
-    x += '\n\n# Tone reminder\nFriend to friend, same age. No stock praise. Do not say Wow, incredible, awesome, or great response. React to what was just said, then one question.';
+    x += '\n\n# Tone reminder\nFriend to friend, same age. No stock praise. Do not say Wow, incredible, awesome, or great response. Do not open with "Nice" or "that\'s a big change". React only to what they just said, then at most one question. Never write a date tag such as [2026-11-08] or [undated].';
     return x;
   }
 
@@ -288,7 +289,7 @@
   }
 
   const LEGACY_KEYS = ['settings', 'sid', 'days', 'vocab', 'levels', 'cards', 'flow', 'demoSeeded'];
-  const APP_VERSION = 11;
+  const APP_VERSION = 12;
   const ARCHIVE_CAP = 500;
   const SESSION_MAX_GAP_MS = 90000;
   const SKIP_ON_IMPORT = { profile: 1 };
@@ -553,44 +554,201 @@
     return { archive: all.slice(0, cut), thread: all.slice(cut) };
   }
 
-  function datedModelMessages(items) {
-    const stamped = [];
-    for (const m of normalizeThread(items, ARCHIVE_CAP + THREAD_CAP)) {
-      const prefix = m.at ? '[' + parisDate(m.at) + '] ' : '[undated] ';
-      stamped.push({ role: m.role, text: prefix + m.text });
-    }
-    return toModelMessages(stamped);
+  function stripMetadataTokens(text) {
+    return String(text || '').replace(/\[(?:undated|\d{4}-\d{2}-\d{2})\][ \t]?/g, '');
   }
 
-  function memoryBrief(items, now, notes) {
+  function incompleteMetadata(s) {
+    if (!s || s[0] !== '[') return false;
+    if ('[undated]'.startsWith(s) && s !== '[undated]') return true;
+    if (s.length >= 12) return false;
+    for (let i = 0; i < s.length; i++) {
+      const c = s[i];
+      if (i === 0) { if (c !== '[') return false; }
+      else if (i <= 4) { if (!/\d/.test(c)) return false; }
+      else if (i === 5) { if (c !== '-') return false; }
+      else if (i <= 7) { if (!/\d/.test(c)) return false; }
+      else if (i === 8) { if (c !== '-') return false; }
+      else if (i <= 10) { if (!/\d/.test(c)) return false; }
+    }
+    return true;
+  }
+
+  function createSpokenSanitizer() {
+    let hold = '';
+    function pull(flush) {
+      let out = '';
+      while (hold.length) {
+        const m = hold.match(/^\[(?:undated|\d{4}-\d{2}-\d{2})\][ \t]?/);
+        if (m) { hold = hold.slice(m[0].length); continue; }
+        if (!flush && incompleteMetadata(hold)) break;
+        out += hold[0];
+        hold = hold.slice(1);
+      }
+      return out;
+    }
+    return {
+      push(chunk) { hold += String(chunk == null ? '' : chunk); return pull(false); },
+      end() { const out = pull(true); hold = ''; return out; }
+    };
+  }
+
+  function limitQuestions(text) {
+    const s = String(text || '');
+    const first = s.indexOf('?');
+    if (first < 0) return s;
+    if (s.indexOf('?', first + 1) < 0) return s;
+    return s.slice(0, first + 1).replace(/[ \t]+$/g, '');
+  }
+
+  function cleanCoachText(text) {
+    const raw = String(text || '');
+    const i = raw.search(/^\s*##/m);
+    const head = i >= 0 ? raw.slice(0, i) : raw;
+    const tail = i >= 0 ? raw.slice(i) : '';
+    const spoken = [];
+    const tips = [];
+    for (const line of head.split('\n')) {
+      if (/^\s*Tip\s*:/i.test(line)) tips.push(line);
+      else spoken.push(line);
+    }
+    const fixed = limitQuestions(stripMetadataTokens(spoken.join('\n'))).trim();
+    return [fixed, tips.join('\n'), tail].filter(s => s && String(s).trim()).join('\n');
+  }
+
+  function forSpeech(text) {
+    const raw = String(text || '');
+    const i = raw.search(/^\s*##/m);
+    const head = i >= 0 ? raw.slice(0, i) : raw;
+    return stripMetadataTokens(head).split('\n').map(l => l.replace(/Tip\s*:.*$/i, '')).join(' ').replace(/\s+/g, ' ').trim();
+  }
+
+  function spokenAloud(text) {
+    return forSpeech(cleanCoachText(text));
+  }
+
+  function speechPlan(text) {
+    const input = forSpeech(text);
+    if (!input) return [];
+    if (input.length <= 700) return [input];
+    const sentences = input.split(/(?<=[.!?])\s+/).filter(Boolean);
+    const out = [];
+    let buf = '';
+    for (const s of sentences) {
+      if (buf && (buf + ' ' + s).length > 500) { out.push(buf); buf = s; }
+      else buf = buf ? buf + ' ' + s : s;
+    }
+    if (buf) out.push(buf);
+    return out.length ? out : [input];
+  }
+
+  function asksAboutPast(text) {
+    const t = String(text || '');
+    if (/\b20\d{2}-\d{2}-\d{2}\b/.test(t)) return true;
+    if (/\b(yesterday|the other day|last night|last week|last time|the day before|what did we|what we did|remember when)\b/i.test(t)) return true;
+    if (/\b(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/i.test(t)) return true;
+    if (/\b(hier|avant-hier|l'autre jour|la derni[eè]re fois|tu te souviens|qu['’]est-ce qu['’]on)\b/i.test(t)) return true;
+    return false;
+  }
+
+  function clipLine(text) {
+    return stripMetadataTokens(text).replace(/\s+/g, ' ').trim().slice(0, 180);
+  }
+
+  function memoryLog(items, now, notes) {
     const list = normalizeThread(items, ARCHIVE_CAP + THREAD_CAP);
     const today = parisDate(now || Date.now());
     const yesterday = parisYesterday(now || Date.now());
-    const days = {};
+    const grouped = {};
     const undated = [];
     for (const m of list) {
-      if (!m.at) { undated.push(m); continue; }
+      const text = clipLine(m.text);
+      if (!text) continue;
+      const row = { role: m.role === 'me' ? 'me' : 'ai', text };
+      if (!m.at) { undated.push(row); continue; }
       const day = parisDate(m.at);
-      if (!day) { undated.push(m); continue; }
-      (days[day] = days[day] || []).push(m);
+      if (!day) { undated.push(row); continue; }
+      (grouped[day] = grouped[day] || []).push(row);
     }
-    const dates = Object.keys(days).sort();
-    let x = '# Dated conversation log (Europe/Paris)\nToday is ' + today + '. Yesterday was ' + yesterday + '.\n';
+    const days = Object.keys(grouped).sort().map(date => ({ date, lines: grouped[date] }));
+    return {
+      today, yesterday, days,
+      undated: undated.slice(-6),
+      notes: normalizeMemory(notes).slice(-12).map(n => n.text)
+    };
+  }
+
+  function normalizeMemoryLog(log) {
+    const src = log && typeof log === 'object' ? log : {};
+    const days = [];
+    for (const day of (Array.isArray(src.days) ? src.days : []).slice(0, 60)) {
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(day && day.date)) continue;
+      const lines = [];
+      for (const m of (Array.isArray(day.lines) ? day.lines : []).slice(-20)) {
+        const text = clipLine(m && m.text);
+        if (!text) continue;
+        lines.push({ role: m.role === 'me' ? 'me' : 'ai', text });
+      }
+      if (lines.length) days.push({ date: day.date, lines });
+    }
+    days.sort((a, b) => a.date < b.date ? -1 : a.date > b.date ? 1 : 0);
+    const undated = [];
+    for (const m of (Array.isArray(src.undated) ? src.undated : []).slice(-6)) {
+      const text = clipLine(m && m.text).slice(0, 160);
+      if (text) undated.push({ role: m.role === 'me' ? 'me' : 'ai', text });
+    }
+    const notes = [];
+    for (const n of (Array.isArray(src.notes) ? src.notes : []).slice(-12)) {
+      const text = cleanExcerpt(typeof n === 'string' ? n : (n && n.text)).slice(0, NOTE_MAX);
+      if (text.length >= 4) notes.push(text);
+    }
+    return {
+      today: /^\d{4}-\d{2}-\d{2}$/.test(src.today) ? src.today : '',
+      yesterday: /^\d{4}-\d{2}-\d{2}$/.test(src.yesterday) ? src.yesterday : '',
+      days, undated, notes
+    };
+  }
+
+  function renderMemoryLog(log, anchor) {
+    const src = normalizeMemoryLog(log);
+    const recall = asksAboutPast(anchor);
+    let x = '# Private dated log (Europe/Paris)\n';
+    x += 'Today is ' + (src.today || 'unknown') + '. Yesterday was ' + (src.yesterday || 'unknown') + '.\n';
+    x += 'Never write or speak a tag such as [2026-11-08] or [undated]. Use a listed day only when they ask about that day. If the day is not listed, say you do not have it. Do not invent lines.\n';
+    const dates = src.days.map(d => d.date);
     x += 'Days with stored turns: ' + (dates.length ? dates.join(', ') : 'none') + '.\n';
-    x += 'Use a day only if it is listed. If they ask about a day that is not listed, say you do not have that day. Do not invent lines, and do not move an undated note onto a date.\n';
-    for (const day of dates) {
-      const label = day === today ? ' (today)' : day === yesterday ? ' (yesterday)' : '';
-      const take = (day === today || day === yesterday) ? days[day].slice(-12) : days[day].slice(0, 3);
-      const lines = take.map(m => (m.role === 'me' ? 'Learner' : 'Coach') + ': ' + m.text.replace(/\s+/g, ' ').slice(0, 180));
-      x += '\n' + day + label + ':\n' + lines.join('\n') + '\n';
+    if (!recall) {
+      x += 'They did not ask about a past day. The lines are withheld. Do not mention an earlier scene, place, or person from this log, and do not invent one.\n';
+    } else {
+      x += 'They asked about a past day. Answer only from the lines below.\n';
+      for (const day of src.days) {
+        const label = day.date === src.today ? ' (today)' : day.date === src.yesterday ? ' (yesterday)' : '';
+        const take = (day.date === src.today || day.date === src.yesterday) ? day.lines.slice(-12) : day.lines.slice(0, 3);
+        const lines = take.map(m => (m.role === 'me' ? 'Learner' : 'Coach') + ': ' + m.text);
+        x += '\n' + day.date + label + ':\n' + lines.join('\n') + '\n';
+      }
+      if (src.undated.length) {
+        x += '\nUndated lines (no timestamp, not a calendar day):\n';
+        src.undated.forEach(m => { x += (m.role === 'me' ? 'Learner' : 'Coach') + ': ' + m.text + '\n'; });
+      }
     }
-    if (undated.length) {
-      x += '\nUndated lines (no timestamp, not a calendar day):\n';
-      undated.slice(-6).forEach(m => { x += (m.role === 'me' ? 'Learner' : 'Coach') + ': ' + m.text.replace(/\s+/g, ' ').slice(0, 160) + '\n'; });
-    }
-    const mem = normalizeMemory(notes).slice(-12);
-    if (mem.length) x += '\nUndated learner notes (not tied to a day):\n- ' + mem.map(n => n.text).join('\n- ') + '\n';
+    if (src.notes.length) x += '\nUndated learner notes (not tied to a day; do not force one into an unrelated topic):\n- ' + src.notes.join('\n- ') + '\n';
     return x.slice(0, 8000);
+  }
+
+  function withholdJournal(journal) {
+    const kept = String(journal || '').split('\n').filter(line => !/^(Learner|Coach):/.test(line) && !/^\d{4}-\d{2}-\d{2}\b/.test(line.trim()) && !/^Undated lines/.test(line) && !/^\s*- /.test(line));
+    const base = kept.join('\n').trim();
+    if (!base) return '';
+    return base + '\nLine text withheld: they did not ask about a past day. Do not mention or invent those lines.\n';
+  }
+
+  function datedModelMessages(items) {
+    return toModelMessages(items);
+  }
+
+  function memoryBrief(items, now, notes, anchor) {
+    return renderMemoryLog(memoryLog(items, now, notes), anchor);
   }
 
   function memoryStatus(items, now) {
@@ -615,18 +773,17 @@
   function speechRequest(opts) {
     const o = opts || {};
     const model = o.model || 'gpt-4o-mini-tts';
-    const text = String(o.text || '').slice(0, 4000);
+    const text = forSpeech(o.text).slice(0, 4000);
     const body = { model, voice: o.voice || 'marin', input: text, response_format: 'mp3' };
-    if (String(model).indexOf('gpt-4o') >= 0) body.instructions = voiceInstructions(o.accentPhrase || 'a natural General American accent', text);
+    if (String(model).indexOf('gpt-4o') >= 0) body.instructions = voiceInstructions(o.accentPhrase || 'a natural General American accent');
     return body;
   }
 
-  function voiceInstructions(accentPhrase, phrase) {
-    return 'Voice: one adult friend in their late twenties, ' + accentPhrase + ', talking in a quiet room. Not a narrator, teacher, announcer, or character.\n' +
-      'Delivery: this clip continues the same reply. Do not reset to a new greeting. Use contractions. Leave a short breath between sentences, not a long pause.\n' +
-      'Melody: ordinary speech. A question lifts a little at the end. A correction is only a shade slower on the repaired words, then back to the same pace.\n' +
-      'Energy: even and interested, not a cheerleader. No laugh, no whisper, no theatrical drop. Do not sound impressed.\n' +
-      (/\?\s*$/.test(String(phrase || '').trim()) ? 'This phrase is a question.' : 'This phrase continues the same reply.');
+  function voiceInstructions(accentPhrase) {
+    return 'Voice: the same adult friend in their late twenties, ' + accentPhrase + ', one person from the first word to the last.\n' +
+      'Same timbre, same pitch, and the same calm pace on every sentence. A question only lifts slightly on its last few words. Do not switch to a brighter, higher, or announcer-like voice for a question.\n' +
+      'Speak the whole passage as one continuous turn in a quiet room. Short breaths between sentences. Contractions. Not a narrator, teacher, announcer, or a second character.\n' +
+      'Energy stays even and interested, not a cheerleader. No laugh, no whisper, no theatrical drop. Do not sound impressed.';
   }
 
   function unclearSpeech(text) {
@@ -655,8 +812,7 @@
     const emit = force => {
       const t = buf.replace(/\s+/g, ' ').trim();
       if (!t) { buf = ''; return; }
-      const sentences = t.split(/(?<=[.!?])\s+/).filter(Boolean);
-      if (force || t.length >= 80 || (sentences.length >= 2 && t.length >= 36)) {
+      if (force || t.length >= 700) {
         onPhrase(t);
         buf = '';
       }
@@ -693,7 +849,8 @@
     profileId, storageKey, wipe, safeHttpUrl, cleanExcerpt, slimMeta,
     recoverLegacy, snapshot, parseTransfer, planImport, applyImport, profileStats,
     recentQuestions, shouldContinueAloud, replyOpenings, unclearSpeech, createPhraseGrouper,
-    parisDate, parisYesterday, combineHistory, splitHistory, datedModelMessages, memoryBrief, memoryStatus, speechRequest, ARCHIVE_CAP,
+    parisDate, parisYesterday, combineHistory, splitHistory, datedModelMessages, memoryBrief, memoryStatus, memoryLog, normalizeMemoryLog, renderMemoryLog, withholdJournal, asksAboutPast, speechRequest, speechPlan, ARCHIVE_CAP,
+    stripMetadataTokens, createSpokenSanitizer, cleanCoachText, forSpeech, spokenAloud, limitQuestions,
     tickSession, startSession, pauseSession, noteSessionSecs, practiceSecs, SESSION_MAX_GAP_MS,
     normalizeThread, appendMessage, toModelMessages, conversationForApi,
     normalizeMemory, mergeMemory, sessionAddendum, openingKind, openingText,
