@@ -174,6 +174,9 @@
     if (mem.length) x += '\n\n# Learner memory — durable facts from earlier talks. Use one when it fits the moment. Do not recite this list, and do not invent facts that are not here or in the conversation.\n- ' + mem.map(m => m.text).join('\n- ');
     if (c.level) x += '\n\n# Last estimated level from previous sessions: ' + String(c.level).slice(0, 8);
     const asked = (Array.isArray(c.asked) ? c.asked : []).map(q => String(q || '').replace(/\s+/g, ' ').trim().slice(0, 160)).filter(q => q.length >= 8).slice(-8);
+    if (c.anchor) x += '\n\n# This turn\nThey just said: "' + cleanExcerpt(c.anchor).slice(0, 220) + '". Answer that. If it is fragmentary, say you missed it instead of inventing the rest.';
+    const openings = (Array.isArray(c.openings) ? c.openings : []).map(s => cleanExcerpt(s).slice(0, 60)).filter(Boolean).slice(-6);
+    if (openings.length) x += '\n\n# Do not open with the same words as these recent replies:\n- ' + openings.join('\n- ');
     if (c.mode === 'pressure') {
       if (asked.length) x += '\n\n# Already asked in this role-play — ask a different question, still in character:\n- ' + asked.join('\n- ');
     } else {
@@ -520,17 +523,77 @@
   }
 
   function voiceInstructions(accentPhrase) {
-    return 'Voice: a warm, relaxed native English speaker in their late twenties with ' + accentPhrase + ' — a friend talking, not a narrator, announcer, or teacher.\n' +
-      'Tone: calm and even, like an equal. Friendly, not bright, not a cheerleader. No performative excitement.\n' +
-      'Pacing: natural, small pauses between ideas; slightly slower on a correction so it is easy to catch.\n' +
-      'Intonation: ordinary conversational melody. Questions sound curious. Never flat, robotic, theatrical, or gushing.';
+    return 'Voice: one adult friend in their late twenties, ' + accentPhrase + ', talking in a quiet room. Not a narrator, teacher, announcer, or character.\n' +
+      'Delivery: this clip continues the same reply. Do not reset to a new greeting. Use contractions. Leave a short breath between sentences, not a long pause.\n' +
+      'Melody: ordinary speech. A question lifts a little at the end. A correction is only a shade slower on the repaired words, then back to the same pace.\n' +
+      'Energy: even and interested, not a cheerleader. No laugh, no whisper, no theatrical drop. Do not sound impressed.';
+  }
+
+  function unclearSpeech(text) {
+    const t = String(text || '').replace(/\[[^\]]*\]/g, ' ').replace(/\s+/g, ' ').trim();
+    if (!t) return true;
+    if (/^(um+|uh+|er+|erm+|hmm+|ah+|euh+|heu+|huh)\.?$/i.test(t)) return true;
+    const words = t.split(' ').filter(Boolean);
+    if (words.length === 1 && words[0].replace(/[^a-z']/gi, '').length < 3) return true;
+    return false;
+  }
+
+  function replyOpenings(thread) {
+    const out = [];
+    for (const m of normalizeThread(thread)) {
+      if (m.role !== 'ai') continue;
+      const start = m.text.replace(/\s+/g, ' ').trim().slice(0, 48);
+      if (start) out.push(start);
+    }
+    return [...new Set(out)].slice(-6);
+  }
+
+  function createPhraseGrouper(onPhrase) {
+    let line = '';
+    let buf = '';
+    const spoken = l => l && !/^\s*(Tip\s*:|##)/i.test(l);
+    const emit = force => {
+      const t = buf.replace(/\s+/g, ' ').trim();
+      if (!t) { buf = ''; return; }
+      const sentences = t.split(/(?<=[.!?])\s+/).filter(Boolean);
+      if (force || t.length >= 80 || (sentences.length >= 2 && t.length >= 36)) {
+        onPhrase(t);
+        buf = '';
+      }
+    };
+    return {
+      push(chunk) {
+        for (const ch of String(chunk || '')) {
+          if (ch === '\n') {
+            if (spoken(line)) buf += ' ' + line;
+            line = '';
+            emit(false);
+            continue;
+          }
+          line += ch;
+          if (!spoken(line)) continue;
+          const m = line.match(/^(.*?[.!?]["”’)]?)(\s+)(.*)$/s);
+          if (m) {
+            buf += ' ' + m[1];
+            line = m[3];
+            emit(false);
+          }
+        }
+      },
+      end() {
+        if (spoken(line)) buf += ' ' + line;
+        line = '';
+        emit(true);
+      }
+    };
   }
 
   return {
     THREAD_CAP, MEMORY_CAP, SEARCH_BLOCKER, SEARCH_NOTE, PROFILE_IDS, DISCOVERY_IDS, LEGACY_KEYS, APP_VERSION,
     profileId, storageKey, wipe, safeHttpUrl, cleanExcerpt, slimMeta,
     recoverLegacy, snapshot, parseTransfer, planImport, applyImport, profileStats,
-    recentQuestions, shouldContinueAloud, tickSession, startSession, pauseSession, noteSessionSecs, practiceSecs, SESSION_MAX_GAP_MS,
+    recentQuestions, shouldContinueAloud, replyOpenings, unclearSpeech, createPhraseGrouper,
+    tickSession, startSession, pauseSession, noteSessionSecs, practiceSecs, SESSION_MAX_GAP_MS,
     normalizeThread, appendMessage, toModelMessages, conversationForApi,
     normalizeMemory, mergeMemory, sessionAddendum, openingKind, openingText,
     shouldSearch, minimalQuery, lookupPrefix, praiseFlags, voiceInstructions

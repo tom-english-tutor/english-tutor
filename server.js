@@ -96,13 +96,7 @@ function publicSearch(result){
   const sources=(result&&result.sources||[]).map(s=>({title:s.title,url:s.url})).filter(s=>logic.safeHttpUrl(s.url));
   return {fresh:!!(result&&result.fresh), reason:(result&&result.reason)||'', mode:(result&&result.mode)||'', sources};
 }
-function chunker(emit){let line='',pend='';const MIN=28;
-  const flush=f=>{const t=pend.trim();if(t&&(f||t.length>=MIN)){emit(t);pend='';}};
-  const spoken=l=>!/^\s*(Tip\s*:|##)/i.test(l);
-  return{push(d){for(const ch of d){if(ch==='\n'){if(spoken(line))pend+=' '+line;line='';flush(true);continue;}line+=ch;
-      if(line.trim().length>=4&&spoken(line)){const m=line.match(/^(.*?[.!?]["”’)]?)(\s+)(.*)$/s);if(m){pend+=' '+m[1];line=m[3];flush(false);}}}},
-    end(){if(spoken(line))pend+=' '+line;line='';flush(true);}};
-}
+function chunker(emit){return logic.createPhraseGrouper(emit);}
 const splitMeta=t=>{const i=t.search(/^\s*##/m);let meta=null;if(i>=0){try{meta=JSON.parse(t.slice(i).replace(/^\s*##\s*/,'').trim());}catch{}t=t.slice(0,i).trim();}return{text:t,meta};};
 
 async function azurePron(wav,ref){
@@ -141,8 +135,8 @@ function createApp(){return http.createServer(async(req,res)=>{try{
   const send=o=>res.write('data: '+JSON.stringify(o)+'\n\n');
   if(a.length<800){send({type:'error',error:"Enregistrement trop court. Appuie, parle, puis appuie à nouveau."});return res.end();}
   let t;try{t=await stt(a,req.headers['content-type']||'audio/webm');}catch(e){send({type:'error',error:'Transcription impossible : '+e.message});return res.end();}
-  tm.stt=Date.now()-T0;send({type:'user',text:t.text});
-  if(!t.text){send({type:'reply',text:"Sorry, I didn't catch that. Could you say it again?"});send({type:'done'});return res.end();}
+  tm.stt=Date.now()-T0;send({type:'user',text:t.text,unclear:logic.unclearSpeech(t.text)});
+  if(!t.text||logic.unclearSpeech(t.text)){send({type:'reply',text:"Sorry, I didn't quite catch that. Could you say it once more?"});send({type:'done'});return res.end();}
   let userText=t.text,searchInfo=null;
   if(logic.shouldSearch({text:userText, explicit:!!ctx.search, mode:ctx.mode})){
     const query=logic.minimalQuery(userText);
