@@ -52,7 +52,6 @@ let archive=CoachLogic.normalizeThread(LS.get('archive',[]),CoachLogic.ARCHIVE_C
 let thread=CoachLogic.normalizeThread(LS.get('thread',[]));
 function remember(msg){const split=CoachLogic.splitHistory(archive,CoachLogic.appendMessage(thread,msg));archive=split.archive;thread=split.thread;try{LS.set('archive',archive);}catch(e){}saveThread();}
 function historyItems(){return CoachLogic.combineHistory(archive,thread);}
-function journalText(){return CoachLogic.memoryBrief(historyItems(),Date.now(),memory);}
 let memory=CoachLogic.normalizeMemory(LS.get('memory',[]));
 function saveThread(){try{LS.set('thread',thread.slice(-CoachLogic.THREAD_CAP));}catch(e){thread=thread.slice(-20);try{LS.set('thread',thread);}catch(err){}}}
 function saveMemory(){try{LS.set('memory',memory);}catch(e){}}
@@ -60,13 +59,13 @@ function ctx(extra){const incoming=extra||{};const pressure=incoming.mode==='pre
  const recent=cards.slice(-10).map(c=>c.en);
  const history=pressure?[]:CoachLogic.datedModelMessages(historyItems()).slice(-6).map(m=>({role:m.role,content:String(m.content).slice(0,180)}));
  const lastMe=[...thread].reverse().find(m=>m.role==='me');
- const journal=pressure?'':journalText().slice(0,1800);
+ const journal=pressure?'':CoachLogic.memoryStatus(historyItems(),Date.now()).summary;
  return Object.assign({accent:S.accent,due,recent,memory:memory.slice(-12).map(m=>m.text),history,journal,asked:pressure?[]:CoachLogic.recentQuestions(historyItems()),openings:pressure?[]:CoachLogic.replyOpenings(historyItems()),anchor:pressure?'':(lastMe&&lastMe.text)||'',hasThread:!pressure&&historyItems().length>0},extra);}
 const b64=o=>btoa(unescape(encodeURIComponent(JSON.stringify(o))));
 let lookupOnce=false;
 function syncLookup(){const b=$('#lookupBtn');if(!b)return;b.classList.toggle('on',lookupOnce);b.setAttribute('aria-pressed',lookupOnce?'true':'false');b.textContent=lookupOnce?'Chercher · oui':'Chercher';}
 function resumeKey(){return 'resumed:'+(PROF||'tom');}
-async function syncContext(){try{await fetch('/api/context?sid='+encodeURIComponent(sid),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({history:CoachLogic.datedModelMessages(historyItems()),journal:journalText(),profile:PROF||'tom'})});}catch(e){console.warn('context',e);}}
+async function syncContext(){try{await fetch('/api/context?sid='+encodeURIComponent(sid),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({history:CoachLogic.datedModelMessages(historyItems()),log:CoachLogic.memoryLog(historyItems(),Date.now(),memory),profile:PROF||'tom'})});}catch(e){console.warn('context',e);}}
 
 /* ---------- audio out ---------- */
 const player=new Audio();player.playsInline=true;player.setAttribute('playsinline','');
@@ -74,18 +73,18 @@ const SILENT='data:audio/mpeg;base64,SUQzBAAAAAAAI1RTU0UAAAAPAAADTGF2ZjU4Ljc2LjE
 function unlock(){if(!player.dataset.u){player.src=SILENT;player.play().catch(()=>{});player.dataset.u=1;}}
 let q=[],playing=false,streamDone=true,onIdle=null,playGen=0,turnGen=0;
 function setRate(r){player.playbackRate=r;player.defaultPlaybackRate=r;try{player.preservesPitch=true;}catch{}}
-function speakFallback(t,done){if(!('speechSynthesis'in window))return done();const u=new SpeechSynthesisUtterance(t);u.lang='en-US';u.rate=S.speed;u.onend=done;u.onerror=done;speechSynthesis.speak(u);}
+function voiceRetry(text){const spoken=CoachLogic.forSpeech(text);if(!spoken)return;setState('idle','Voix indisponible');const d=document.createElement('div');d.className='fix';d.innerHTML='<div>La voix n’a pas répondu. Réessaie avec la même voix.</div><button type="button" class="act">Réessayer la voix</button>';d.querySelector('button').onclick=()=>{d.remove();say(spoken);};log.appendChild(d);log.scrollTop=1e9;}
 function playNext(){if(playing)return;const c=q.shift();if(!c){if(streamDone&&onIdle){const f=onIdle;onIdle=null;f();}return;}
  if(c.gen!=null&&c.gen!==playGen)return playNext();
+ if(!c.audio){voiceRetry(c.text);return playNext();}
  const gen=playGen;playing=true;const fin=()=>{if(gen!==playGen)return;playing=false;playNext();};
- if(!c.audio)return speakFallback(c.text,fin);
- player.onended=fin;player.onerror=()=>{if(gen!==playGen)return;player.onended=null;speakFallback(c.text,fin);};
- player.src=c.audio.startsWith('blob:')||c.audio.startsWith('data:')?c.audio:'data:audio/mpeg;base64,'+c.audio;setRate(c.rate||S.speed);
- player.play().then(()=>{if(gen===playGen)setState('speak','Speaking');}).catch(()=>{if(gen!==playGen)return;player.onended=null;speakFallback(c.text,fin);});}
-function stopAudio(){playGen++;q=[];playing=false;player.pause();player.onended=null;player.onerror=null;if('speechSynthesis'in window)speechSynthesis.cancel();}
+ const fail=()=>{if(gen!==playGen)return;player.onended=null;player.onerror=null;playing=false;voiceRetry(c.text);playNext();};
+ player.onended=fin;player.onerror=fail;player.src=c.audio.startsWith('blob:')||c.audio.startsWith('data:')?c.audio:'data:audio/mpeg;base64,'+c.audio;setRate(c.rate||S.speed);
+ player.play().then(()=>{if(gen===playGen)setState('speak','Speaking');}).catch(fail);}
+function stopAudio(){playGen++;q=[];playing=false;player.pause();player.onended=null;player.onerror=null;}
 const ttsCache=new Map();
-async function ttsUrl(text){const k=S.accent+'|'+text;if(ttsCache.has(k))return ttsCache.get(k);const r=await fetch('/api/tts',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text,accent:S.accent})});if(!r.ok)throw new Error('tts');const u=URL.createObjectURL(await r.blob());ttsCache.set(k,u);return u;}
-async function say(text,rate){stopAudio();unlock();const gen=playGen;let a=null;try{a=await ttsUrl(text);}catch{}if(gen!==playGen)return;streamDone=true;q.push({text,audio:a,rate:rate||S.speed,gen});playNext();}
+async function ttsUrl(text){const voice=(health.voices&&health.voices[S.accent])||'';const k=voice+'|'+S.accent+'|'+text;if(ttsCache.has(k))return ttsCache.get(k);const r=await fetch('/api/tts',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text,accent:S.accent})});if(!r.ok)throw new Error('tts');const u=URL.createObjectURL(await r.blob());ttsCache.set(k,u);return u;}
+async function say(text,rate){const spoken=CoachLogic.forSpeech(text);if(!spoken)return;stopAudio();unlock();const gen=playGen;let a=null;try{a=await ttsUrl(spoken);}catch(e){if(gen===playGen)voiceRetry(spoken);return;}if(gen!==playGen)return;streamDone=true;q.push({text:spoken,audio:a,rate:rate||S.speed,gen});playNext();}
 
 /* ---------- recording ---------- */
 let stream,ac;
@@ -151,9 +150,9 @@ function paintSearch(info, sources, el){const node=el||document.createElement('d
  else {const reason=info&&info.reason;node.textContent=reason==='disabled'?'Recherche désactivée — pas d’info fraîche':reason==='timeout'?'Recherche trop lente — pas d’info fraîche':'Pas trouvé en ligne — pas d’info fraîche';}
  if(!el)log.appendChild(node);log.scrollTop=1e9;return node;}
 function renderThread(){log.innerHTML='';if(!thread.length){hello();return;}
- for(const m of thread){if(m.role==='me')bubble(m.text,'me');else{if(m.search)paintSearch(m.search,m.sources);renderReply(m.text,m.meta||null);}}}
-function renderReply(text,meta){const h=$('.hello',log);if(h)h.remove();const tips=[];
- const main=text.split('\n').filter(l=>{const m=l.match(/^\s*Tip\s*:\s*(.*)/i);if(m){if(!mode.pressure)tips.push(m[1]);return false}return!/^\s*##/.test(l)}).join('\n').replace(/\n{2,}/g,'\n\n').trim();
+ for(const m of thread){if(m.role==='me')bubble(CoachLogic.stripMetadataTokens(m.text),'me');else{if(m.search)paintSearch(m.search,m.sources);renderReply(m.text,m.meta||null);}}}
+function renderReply(text,meta){const h=$('.hello',log);if(h)h.remove();const tips=[];const safe=CoachLogic.stripMetadataTokens(text);
+ const main=safe.split('\n').filter(l=>{const m=l.match(/^\s*Tip\s*:\s*(.*)/i);if(m){if(!mode.pressure)tips.push(m[1]);return false}return!/^\s*##/.test(l)}).join('\n').replace(/\n{2,}/g,'\n\n').trim();
  bubble(main,'ai');const mk=(meta&&meta.mistakes)||[];
  mk.forEach((m,i)=>{if(!m||!m.right)return;const d=document.createElement('div');d.className='fix';
   d.innerHTML=`<div class="k">Correction</div>${m.wrong?`<div><s>${esc(m.wrong)}</s></div>`:''}<div class="right">${esc(m.right)}</div>${i===0&&tips[0]?`<div class="fr">${esc(tips[0])}</div>`:''}<button class="act">🔁 Répéter</button>`;
@@ -173,9 +172,12 @@ const drawIdle=()=>{cancelAnimationFrame(raf);cx.clearRect(0,0,cv.width,cv.heigh
 async function beginGreeting(opts){opts=opts||{};setState('busy','Thinking');if(!mode.pressure)await syncContext();
  try{const extra=mode.pressure?{mode:'pressure',scenario:mode.scenario}:{resume:!!opts.resume};
   const r=await fetch('/api/start',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({sid,ctx:ctx(extra)})});const j=await r.json();if(!r.ok)throw new Error(j.error||'start');
-  renderReply(j.reply,j.meta);
-  if(!mode.pressure&&j.reply)remember({role:'ai',text:j.reply,meta:CoachLogic.slimMeta(j.meta),at:Date.now()});
-  streamDone=true;onIdle=afterTeacher;q.push({text:j.reply,audio:j.audio});playNext();}
+  const reply=CoachLogic.cleanCoachText(j.reply||'');
+  renderReply(reply,j.meta);
+  if(!mode.pressure&&reply)remember({role:'ai',text:reply,meta:CoachLogic.slimMeta(j.meta),at:Date.now()});
+  const spoken=CoachLogic.forSpeech(reply);streamDone=true;
+  if(j.audio&&spoken){onIdle=afterTeacher;q.push({text:spoken,audio:j.audio,gen:playGen});playNext();}
+  else{if(spoken&&!j.audio)voiceRetry(spoken);afterTeacher();}}
  catch(e){bubble('Erreur : '+e.message,'err');setState('idle','Prêt');}}
 function clearConversation(){thread=[];saveThread();try{sessionStorage.removeItem(resumeKey());}catch(e){}fetch('/api/reset?sid='+encodeURIComponent(sid),{method:'POST'}).catch(()=>{});hello();refreshHome();}
 async function openChat(pressure,scenario,opts){opts=opts||{};mode={pressure:!!pressure,scenario:scenario||''};
@@ -200,7 +202,7 @@ micBtn.onclick=async()=>{
  if(mode.pressure){let t=+S.pSecs||45;$('#pTimer').textContent=t+'s';clearInterval(pTimerId);pTimerId=setInterval(()=>{t--;$('#pTimer').textContent=t+'s';if(t<=10)setState('rec',`Plus que ${t}s`,true);if(t<=0&&mainRec){mainRec.interrupted=true;micBtn.click();}},1000);}};
 async function sendTurn(rec,interrupted){const my=++turnGen;setState('busy','Thinking');if(!rec||rec.blob.size<1500)return setState('idle','Trop court — réessaie');
  const doSearch=lookupOnce&&!mode.pressure;lookupOnce=false;syncLookup();
- const pending=bubble('…','me');let live=null,acc='',searchEl=null,searchSaved=null;stopAudio();streamDone=false;onIdle=afterTeacher;
+ const pending=bubble('…','me');let live=null,acc='',searchEl=null,searchSaved=null;const speakFilter=CoachLogic.createSpokenSanitizer();stopAudio();streamDone=false;onIdle=afterTeacher;
  try{if(!mode.pressure)await syncContext();
   const r=await fetch('/api/stream?sid='+encodeURIComponent(sid),{method:'POST',headers:{'Content-Type':rec.type,'X-Ctx':b64(ctx({secs:rec.secs,interrupted:!!interrupted,search:doSearch,...(mode.pressure?{mode:'pressure',scenario:mode.scenario}:{})}))},body:rec.blob});
   if(!r.ok||!r.body)throw new Error('HTTP '+r.status);const rd=r.body.getReader(),dec=new TextDecoder();let buf='';
@@ -209,10 +211,10 @@ async function sendTurn(rec,interrupted){const my=++turnGen;setState('busy','Thi
     if(my!==turnGen)return;
     if(ev.type==='user'){if(ev.text){pending.textContent=ev.text+(interrupted?'  ⏱':'');logSpeech(ev.text,rec.secs);if(!mode.pressure&&!ev.unclear)remember({role:'me',text:ev.text,at:Date.now()});}else pending.remove();}
     else if(ev.type==='search'){if(ev.state==='searching'){searchEl=paintSearch({reason:'searching'});setState('busy','Recherche…');}else{searchSaved={fresh:!!ev.fresh,reason:ev.reason||'',mode:ev.mode||'',sources:ev.sources||[]};if(searchEl)paintSearch(searchSaved,searchSaved.sources,searchEl);else searchEl=paintSearch(searchSaved);}}
-    else if(ev.type==='delta'){acc+=ev.text;const v=acc.split('\n').filter(x=>!/^\s*(Tip\s*:|##)/i.test(x)).join('\n').trim();if(v){if(!live)live=bubble('','ai');live.textContent=v;log.scrollTop=1e9;}}
-    else if(ev.type==='audio'){if(my!==turnGen)continue;q.push(Object.assign({gen:playGen},ev));playNext();}
-    else if(ev.type==='reply'){if(live)live.remove();renderReply(ev.text,ev.meta);if(!ev.text||!/didn't quite catch/i.test(ev.text))absorbMeta(ev.meta);
-     if(!mode.pressure&&ev.text&&!/didn't quite catch/i.test(ev.text)){const item={role:'ai',text:ev.text,meta:CoachLogic.slimMeta(ev.meta),at:Date.now()};if(searchSaved){item.search=searchSaved;if(searchSaved.sources)item.sources=searchSaved.sources;}remember(item);refreshHome();}}
+    else if(ev.type==='delta'){acc+=speakFilter.push(ev.text||'');const v=acc.split('\n').filter(x=>!/^\s*(Tip\s*:|##)/i.test(x)).join('\n').trim();if(v){if(!live)live=bubble('','ai');live.textContent=v;log.scrollTop=1e9;}}
+    else if(ev.type==='audio'){if(my!==turnGen)continue;const said=CoachLogic.forSpeech(ev.text||'');if(!ev.audio){voiceRetry(said);continue;}q.push(Object.assign({gen:playGen},ev,{text:said}));playNext();}
+    else if(ev.type==='reply'){speakFilter.end();const reply=CoachLogic.cleanCoachText(ev.text||'');if(live)live.remove();renderReply(reply,ev.meta);if(!reply||!/didn't quite catch/i.test(reply))absorbMeta(ev.meta);
+     if(!mode.pressure&&reply&&!/didn't quite catch/i.test(reply)){const item={role:'ai',text:reply,meta:CoachLogic.slimMeta(ev.meta),at:Date.now()};if(searchSaved){item.search=searchSaved;if(searchSaved.sources)item.sources=searchSaved.sources;}remember(item);refreshHome();}}
     else if(ev.type==='error')throw new Error(ev.error);
     else if(ev.type==='done'){streamDone=true;if(!playing&&!q.length){const f=onIdle;onIdle=null;f&&f();}}}}
  }catch(e){if(pending.textContent==='…')pending.remove();if(searchEl&&!searchSaved)paintSearch({fresh:false,reason:'error'},null,searchEl);bubble('Erreur : '+e.message,'err');setState('idle','Prêt');}}

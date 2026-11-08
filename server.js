@@ -19,7 +19,7 @@ const PRESSURE={
  pitch:'a sharp, impatient investor (VC) listening to {{NAME}} pitch {{PITCH}} and asking hard questions about numbers, market and competition'};
 const sessions=new Map();
 const journals=new Map();
-const englishOnly=t=>t.replace(/^\s*##.*$/ms,'').split('\n').map(l=>l.replace(/Tip\s*:.*$/i,'')).join(' ').replace(/\s+/g,' ').trim();
+const logs=new Map();
 function body(req,max=25e6){return new Promise((res,rej)=>{const c=[];let n=0;req.on('data',d=>{n+=d.length;if(n>max){rej(new Error('Fichier trop gros'));req.destroy();}else c.push(d);});req.on('end',()=>res(Buffer.concat(c)));req.on('error',rej);});}
 const json=(res,code,o)=>{res.writeHead(code,{'Content-Type':'application/json'});res.end(JSON.stringify(o));};
 const jbody=async req=>{try{return JSON.parse((await body(req)).toString()||'{}');}catch{return{};}};
@@ -27,8 +27,9 @@ function parseB64(h){try{return h?JSON.parse(Buffer.from(h,'base64').toString('u
 
 async function tts(text,accent){
   if(!OKEY)throw new Error('OPENAI_API_KEY manquante');
-  const input=englishOnly(text).slice(0,4000);if(!input)throw new Error('rien à lire');
-  const p=logic.speechRequest({text:input,model:TTS_MODEL,voice:acc(accent).voice,accentPhrase:acc(accent).accent});
+  const input=logic.forSpeech(text).slice(0,4000);if(!input)throw new Error('rien à lire');
+  const voice=acc(accent).voice;
+  const p=logic.speechRequest({text:input,model:TTS_MODEL,voice,accentPhrase:acc(accent).accent});
   const r=await fetch('https://api.openai.com/v1/audio/speech',{method:'POST',headers:{Authorization:'Bearer '+OKEY,'Content-Type':'application/json'},body:JSON.stringify(p)});
   if(!r.ok)throw new Error('TTS '+r.status+': '+(await r.text()).slice(0,200));
   return Buffer.from(await r.arrayBuffer());
@@ -84,7 +85,7 @@ async function* claudeStream(sid,text,ctx){
   let full='',buf='';const dec=new TextDecoder();
   for await(const c of r.body){buf+=dec.decode(c,{stream:true});let i;while((i=buf.indexOf('\n'))>=0){const l=buf.slice(0,i).trim();buf=buf.slice(i+1);
     if(!l.startsWith('data:'))continue;try{const ev=JSON.parse(l.slice(5));if(ev.type==='content_block_delta'&&ev.delta&&ev.delta.type==='text_delta'){full+=ev.delta.text;yield ev.delta.text;}}catch{}}}
-  msgs.push({role:'assistant',content:full});sessions.set(sid,msgs.slice(-40));
+  msgs.push({role:'assistant',content:logic.cleanCoachText(full)});sessions.set(sid,msgs.slice(-40));
 }
 async function anthropicLookup(query){
   const spec=searchLib.anthropicToolBody(query);
@@ -97,8 +98,15 @@ function publicSearch(result){
   const sources=(result&&result.sources||[]).map(s=>({title:s.title,url:s.url})).filter(s=>logic.safeHttpUrl(s.url));
   return {fresh:!!(result&&result.fresh), reason:(result&&result.reason)||'', mode:(result&&result.mode)||'', sources};
 }
-function chunker(emit){return logic.createPhraseGrouper(emit);}
 const splitMeta=t=>{const i=t.search(/^\s*##/m);let meta=null;if(i>=0){try{meta=JSON.parse(t.slice(i).replace(/^\s*##\s*/,'').trim());}catch{}t=t.slice(0,i).trim();}return{text:t,meta};};
+function journalFor(sid,ctx,userText){
+  const log=logs.get(sid);
+  if(log)return logic.renderMemoryLog(log,userText||'');
+  const posted=journals.get(sid);
+  const raw=posted||(ctx&&ctx.journal)||'';
+  if(!raw)return '';
+  return logic.asksAboutPast(userText)?String(raw):logic.withholdJournal(raw);
+}
 
 async function azurePron(wav,ref){
   const pa=Buffer.from(JSON.stringify({ReferenceText:ref,GradingSystem:'HundredMark',Granularity:'Phoneme',Dimension:'Comprehensive',EnableMiscue:true})).toString('base64');
@@ -115,8 +123,8 @@ const TYPES={'.html':'text/html; charset=utf-8','.webmanifest':'application/mani
 function createApp(){return http.createServer(async(req,res)=>{try{
  const u=new URL(req.url,'http://x'),q=u.searchParams,sid=q.get('sid')||'default',P=u.pathname;
  if(P==='/api/health'){const mode=searchLib.searchMode(process.env);return json(res,200,{ok:true,version:logic.APP_VERSION,hasKey:!!KEY,model:MODEL,tts:!!OKEY,ttsModel:TTS_MODEL,ttsInstructions:String(TTS_MODEL).includes('gpt-4o'),voices:{us:acc('us').voice,uk:acc('uk').voice,au:acc('au').voice},sttModel:STT_MODEL,pron:!!(AZ_KEY&&AZ_REGION),accents:Object.keys(ACCENTS),profiles:logic.PROFILE_IDS,search:mode,searchNote:logic.SEARCH_NOTE[mode]||logic.SEARCH_BLOCKER,persistence:'device-local'});}
- if(P==='/api/context'&&req.method==='POST'){const b=await jbody(req);if(b.profile!=null&&b.profile!==''&&!logic.profileId(b.profile))return json(res,400,{error:'profil inconnu'});const h=logic.toModelMessages(b.history||[]);sessions.set(sid,h);if(typeof b.journal==='string')journals.set(sid,b.journal.slice(0,8000));return json(res,200,{ok:true,turns:h.length,profile:logic.profileId(b.profile),journal:journals.has(sid)});}
- if(P==='/api/reset'&&req.method==='POST'){sessions.delete(sid);return json(res,200,{ok:true});}
+ if(P==='/api/context'&&req.method==='POST'){const b=await jbody(req);if(b.profile!=null&&b.profile!==''&&!logic.profileId(b.profile))return json(res,400,{error:'profil inconnu'});const h=logic.toModelMessages(b.history||[]);sessions.set(sid,h);if(typeof b.journal==='string')journals.set(sid,b.journal.slice(0,8000));if(b.log&&typeof b.log==='object')logs.set(sid,logic.normalizeMemoryLog(b.log));return json(res,200,{ok:true,turns:h.length,profile:logic.profileId(b.profile),journal:journals.has(sid)||logs.has(sid)});}
+ if(P==='/api/reset'&&req.method==='POST'){sessions.delete(sid);journals.delete(sid);logs.delete(sid);return json(res,200,{ok:true});}
  if(P==='/api/tts'&&req.method==='POST'){const b=await jbody(req);
   try{const mp3=await tts(String(b.text||''),b.accent);res.writeHead(200,{'Content-Type':'audio/mpeg','Content-Length':mp3.length,'Cache-Control':'private, max-age=86400'});return res.end(mp3);}catch(e){return json(res,502,{error:e.message});}}
  if(P==='/api/transcribe'&&req.method==='POST'){const a=await body(req);if(a.length<800)return json(res,400,{error:'Enregistrement trop court.'});
@@ -132,7 +140,6 @@ function createApp(){return http.createServer(async(req,res)=>{try{
    const m=t.match(/\{[\s\S]*\}/);return json(res,200,m?JSON.parse(m[0]):{score:0,feedback:t});}catch(e){return json(res,502,{error:e.message});}}
  if(P==='/api/stream'&&req.method==='POST'){
   const T0=Date.now(),tm={};const a=await body(req);const ctx=parseB64(req.headers['x-ctx']);ctx.accent=q.get('accent')||ctx.accent;
-  const posted=journals.get(sid);if(posted&&(!ctx.journal||posted.length>String(ctx.journal).length))ctx.journal=posted;
   res.writeHead(200,{'Content-Type':'text/event-stream','Cache-Control':'no-cache, no-transform','Connection':'keep-alive','X-Accel-Buffering':'no'});
   const send=o=>res.write('data: '+JSON.stringify(o)+'\n\n');
   if(a.length<800){send({type:'error',error:"Enregistrement trop court. Appuie, parle, puis appuie à nouveau."});return res.end();}
@@ -151,17 +158,22 @@ function createApp(){return http.createServer(async(req,res)=>{try{
     userText=logic.lookupPrefix(query, result)+'\n\n'+userText;
   }
   if(ctx.interrupted)userText+='\n['+prof(ctx).name+' ran out of time — '+(prof(ctx).g==='f'?'her':'his')+' answer was cut off by the timer.]';if(ctx.secs)userText+=`\n[spoke ${Math.round(ctx.secs)}s]`;
-  let chain=Promise.resolve(),idx=0;
-  const ck=chunker(chunk=>{const i=idx++;const pr=tts(chunk,ctx.accent).then(b=>b.toString('base64')).catch(e=>{console.error(e.message);return null;});
-    chain=chain.then(async()=>{const b64=await pr;if(i===0)tm.firstAudio=Date.now()-T0;send({type:'audio',i,text:chunk,audio:b64});});});
-  try{let full='',first=true;for await(const d of claudeStream(sid,userText,ctx)){if(first){tm.firstToken=Date.now()-T0;first=false;}full+=d;send({type:'delta',text:d});ck.push(d);}
-    ck.end();tm.claudeDone=Date.now()-T0;const{text,meta}=splitMeta(full);send({type:'reply',text,meta,search:searchInfo});await chain;tm.total=Date.now()-T0;send({type:'done',timings:tm});console.log('timings',JSON.stringify(tm));}
+  ctx.journal=journalFor(sid,ctx,t.text);
+  const filter=logic.createSpokenSanitizer();
+  let spokenRaw='';
+  const emitDelta=piece=>{if(!piece)return;spokenRaw+=piece;send({type:'delta',text:piece});};
+  try{let first=true;for await(const d of claudeStream(sid,userText,ctx)){if(first){tm.firstToken=Date.now()-T0;first=false;}emitDelta(filter.push(d));}
+    emitDelta(filter.end());tm.claudeDone=Date.now()-T0;const cleaned=logic.cleanCoachText(spokenRaw);const{text,meta}=splitMeta(cleaned);send({type:'reply',text,meta,search:searchInfo});
+    const plan=logic.speechPlan(logic.spokenAloud(cleaned));const voice=acc(ctx.accent).voice;
+    for(let i=0;i<plan.length;i++){try{const b64=(await tts(plan[i],ctx.accent)).toString('base64');if(i===0)tm.firstAudio=Date.now()-T0;send({type:'audio',i,text:plan[i],audio:b64,voice,model:TTS_MODEL});}catch(e){console.error(e.message);send({type:'audio',i,text:plan[i],audio:null,error:'voice'});}}
+    tm.total=Date.now()-T0;send({type:'done',timings:tm});console.log('timings',JSON.stringify(tm));}
   catch(e){send({type:'error',error:e.message});}
   return res.end();
  }
  if(P==='/api/start'&&req.method==='POST'){ // teacher opens or resumes (no audio)
   const b=await jbody(req);const ctx=b.ctx||{};const sid2=String(b.sid||sid);const prior=sessions.get(sid2)||[];const pn=prof(ctx).name;const opener=logic.openingText(ctx, prior.length, pn);
-  try{let full='';for await(const d of claudeStream(String(b.sid||sid),opener,ctx))full+=d;const{text,meta}=splitMeta(full);let audio=null;try{audio=(await tts(text,ctx.accent)).toString('base64');}catch{}
+  ctx.journal=journalFor(sid2,ctx,logic.asksAboutPast(ctx.anchor)?ctx.anchor:'');
+  try{let full='';for await(const d of claudeStream(String(b.sid||sid),opener,ctx))full+=d;const cleaned=logic.cleanCoachText(full);const{text,meta}=splitMeta(cleaned);let audio=null;try{audio=(await tts(logic.spokenAloud(cleaned),ctx.accent)).toString('base64');}catch{}
    return json(res,200,{reply:text,meta,audio});}catch(e){return json(res,e.code||500,{error:e.message});}}
  if(P==='/api/recap'&&req.method==='POST'){const b=await jbody(req);
   const P0=prof(b.ctx);const h=(sessions.get(String(b.sid||sid))||[]).map(m=>(m.role==='user'?P0.name.toUpperCase()+': ':'TEACHER: ')+m.content).join('\n').slice(-12000);

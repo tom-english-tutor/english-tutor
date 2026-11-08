@@ -19,7 +19,8 @@ test('a dated conversation answers yesterday and does not invent another day', (
     { role: 'me', text: 'I edited chapter three today.', at: NOW - 3600000 }
   ];
   const chloe = [{ role: 'me', text: 'I sketched a museum.', at: YDAY }];
-  const brief = logic.memoryBrief(tom, NOW, [{ text: 'Has a girlfriend' }]);
+  const brief = logic.memoryBrief(tom, NOW, [{ text: 'Has a girlfriend' }], 'What did we do yesterday?');
+  const mma = logic.memoryBrief(tom, NOW, [{ text: 'Has a girlfriend' }], "Let's talk about MMA.");
   assert.match(brief, /Today is 2026-11-08/);
   assert.match(brief, /Yesterday was 2026-11-07/);
   assert.match(brief, /2026-11-07 \(yesterday\)/);
@@ -33,7 +34,11 @@ test('a dated conversation answers yesterday and does not invent another day', (
   assert.equal(status.yesterdayCount > 0, true);
   assert.match(logic.memoryStatus([], NOW).summary, /ne peut pas être reconstitué/);
   const msgs = logic.datedModelMessages(tom);
-  assert.match(msgs.map(m => m.content).join('\n'), /\[2026-11-07\] We stayed on the sofa/);
+  assert.match(msgs.map(m => m.content).join('\n'), /We stayed on the sofa/);
+  assert.doesNotMatch(msgs.map(m => m.content).join('\n'), /\[2026-11-07\]|\[undated\]/);
+  assert.doesNotMatch(mma, /sofa|cushion|chapter three/);
+  assert.match(mma, /2026-11-07/);
+  assert.match(mma, /withheld/);
   const kept = logic.splitHistory([], tom.concat(Array.from({ length: 50 }, (_, i) => ({ role: 'me', text: 'line ' + i, at: NOW }))));
   assert.equal(kept.thread.length, logic.THREAD_CAP);
   assert.ok(kept.archive.length > 0);
@@ -43,10 +48,14 @@ test('a dated conversation answers yesterday and does not invent another day', (
 
 test('speech request stays on the current model and sends instructions', () => {
   const body = logic.speechRequest({ text: 'You went yesterday?', voice: 'marin', model: 'gpt-4o-mini-tts', accentPhrase: 'a natural General American accent' });
+  const statement = logic.speechRequest({ text: 'MMA takes a lot of work.', voice: 'marin', model: 'gpt-4o-mini-tts', accentPhrase: 'a natural General American accent' });
   assert.equal(body.model, 'gpt-4o-mini-tts');
   assert.equal(body.voice, 'marin');
-  assert.match(body.instructions, /question/i);
+  assert.equal(body.instructions, statement.instructions);
+  assert.equal(body.voice, statement.voice);
+  assert.match(body.instructions, /one person/);
   assert.match(body.instructions, /not a cheerleader/);
+  assert.doesNotMatch(body.instructions, /This phrase is a question/);
   assert.doesNotMatch(body.input, /Taïa|journal|yesterday was/i);
   const legacy = logic.speechRequest({ text: 'Hello.', model: 'tts-1', voice: 'coral' });
   assert.equal(legacy.instructions, undefined);
