@@ -24,10 +24,20 @@ const days=LS.get('days',{});const vocab=new Set(LS.get('vocab',[]));const level
 const dayRec=(d=today())=>days[d]||(days[d]={secs:0,words:0,errors:0,turns:0,uniq:[]});
 const words=t=>(t.toLowerCase().match(/[a-z']+/g)||[]);
 function logSpeech(text,secs){const d=dayRec(),w=words(text);d.secs+=secs;d.words+=w.length;d.turns++;const u=new Set(d.uniq);w.forEach(x=>{u.add(x);vocab.add(x)});d.uniq=[...u].slice(0,3000);LS.set('days',days);LS.set('vocab',[...vocab].slice(-20000));refreshHome();}
+let clock=null;
+try{clock=LS.get('clock',null);}catch(e){clock=null;}
+function saveClock(){try{LS.set('clock',clock);}catch(e){}}
+function paintSessionBtn(){const b=$('#sessionCtl');if(!b)return;b.hidden=!clock;if(!clock)return;b.textContent=clock.active?'Pause':'Reprendre';b.setAttribute('aria-pressed',clock.active?'true':'false');}
+function syncClock(visible){if(!clock){paintSessionBtn();return;}const show=visible!==false&&document.visibilityState!=='hidden';const r=CoachLogic.tickSession(clock,Date.now(),show);clock=r.clock;if(r.addMs>0){const d=dayRec();CoachLogic.noteSessionSecs(d,r.addMs/1000);LS.set('days',days);refreshHome();}saveClock();paintSessionBtn();}
+function beginPractice(){if(clock&&clock.active&&!clock.hidden)return;clock=CoachLogic.startSession(clock,Date.now());saveClock();paintSessionBtn();}
+function pausePractice(){const r=CoachLogic.pauseSession(clock,Date.now(),document.visibilityState!=='hidden');clock=r.clock;if(r.addMs>0){const d=dayRec();CoachLogic.noteSessionSecs(d,r.addMs/1000);LS.set('days',days);refreshHome();}saveClock();paintSessionBtn();}
+document.addEventListener('visibilitychange',()=>{if(!clock||!clock.active)return;if(document.visibilityState==='hidden'){const r=CoachLogic.tickSession(clock,Date.now(),false);clock=r.clock;if(r.addMs>0){const d=dayRec();CoachLogic.noteSessionSecs(d,r.addMs/1000);LS.set('days',days);}saveClock();}else syncClock(true);});
+window.addEventListener('pagehide',()=>{if(clock&&clock.active){const r=CoachLogic.tickSession(clock,Date.now(),false);clock=r.clock;saveClock();}if(mainRec&&mainRec.on){const rec=mainRec;mainRec=null;rec.stop().then(r=>{if(r.secs>=1.2)sendTurn(r,false);else setState('idle','À toi');}).catch(()=>setState('idle','À toi'));}});
+setInterval(()=>{if(clock&&clock.active&&document.visibilityState!=='hidden')syncClock(true);},5000);
 function logErrors(n){dayRec().errors+=n;LS.set('days',days);}
 function lastLevel(){return(levels[levels.length-1]||{}).l||ME.lvl;}
 function logLevel(l){if(!/^[ABC][12]$/.test(l||''))return;levels.push({d:today(),l});LS.set('levels',levels.slice(-500));}
-function streak(){const g=S.goal*60;let n=0,d=new Date();if((days[today(d)]||{}).secs>=g)n++;for(;;){d.setDate(d.getDate()-1);if((days[today(d)]||{}).secs>=g)n++;else break;}return n;}
+function streak(){const g=S.goal*60;let n=0,d=new Date();if(CoachLogic.practiceSecs(days[today(d)]||{})>=g)n++;for(;;){d.setDate(d.getDate()-1);if(CoachLogic.practiceSecs(days[today(d)]||{})>=g)n++;else break;}return n;}
 function lastDays(n){const out=[];const d=new Date();d.setDate(d.getDate()-n+1);for(let i=0;i<n;i++){out.push([today(d),days[today(d)]||{secs:0,words:0,errors:0,uniq:[]}]);d.setDate(d.getDate()+1);}return out;}
 
 /* ---------- spaced repetition (SM-2) ---------- */
@@ -45,7 +55,8 @@ function saveMemory(){try{LS.set('memory',memory);}catch(e){}}
 function ctx(extra){const incoming=extra||{};const pressure=incoming.mode==='pressure';extra=Object.assign({profile:PROF||'tom',level:lastLevel(),first:!Object.keys(days).length&&!thread.length},incoming);const due=dueCards().slice(0,6).map(c=>c.type==='fix'?`"${c.en}" (used to say: "${c.wrong}")`:`expression "${c.en}" (${c.fr})`);
  const recent=cards.slice(-10).map(c=>c.en);
  const history=pressure?[]:CoachLogic.toModelMessages(thread).slice(-8).map(m=>({role:m.role,content:String(m.content).slice(0,240)}));
- return Object.assign({accent:S.accent,due,recent,memory:memory.slice(-12).map(m=>m.text),history},extra);}
+ const lastMe=[...thread].reverse().find(m=>m.role==='me');
+ return Object.assign({accent:S.accent,due,recent,memory:memory.slice(-12).map(m=>m.text),history,asked:pressure?[]:CoachLogic.recentQuestions(thread),openings:pressure?[]:CoachLogic.replyOpenings(thread),anchor:pressure?'':(lastMe&&lastMe.text)||'',hasThread:!pressure&&thread.length>0},extra);}
 const b64=o=>btoa(unescape(encodeURIComponent(JSON.stringify(o))));
 let lookupOnce=false;
 function syncLookup(){const b=$('#lookupBtn');if(!b)return;b.classList.toggle('on',lookupOnce);b.setAttribute('aria-pressed',lookupOnce?'true':'false');b.textContent=lookupOnce?'Chercher · oui':'Chercher';}
@@ -56,17 +67,20 @@ async function syncContext(){try{await fetch('/api/context?sid='+encodeURICompon
 const player=new Audio();player.playsInline=true;player.setAttribute('playsinline','');
 const SILENT='data:audio/mpeg;base64,SUQzBAAAAAAAI1RTU0UAAAAPAAADTGF2ZjU4Ljc2LjEwMAAAAAAAAAAAAAAA//tQAAAAAAAAAAAAAAAAAAAAAAAASW5mbwAAAA8AAAACAAABIADAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDA';
 function unlock(){if(!player.dataset.u){player.src=SILENT;player.play().catch(()=>{});player.dataset.u=1;}}
-let q=[],playing=false,streamDone=true,onIdle=null;
+let q=[],playing=false,streamDone=true,onIdle=null,playGen=0,turnGen=0;
 function setRate(r){player.playbackRate=r;player.defaultPlaybackRate=r;try{player.preservesPitch=true;}catch{}}
 function speakFallback(t,done){if(!('speechSynthesis'in window))return done();const u=new SpeechSynthesisUtterance(t);u.lang='en-US';u.rate=S.speed;u.onend=done;u.onerror=done;speechSynthesis.speak(u);}
 function playNext(){if(playing)return;const c=q.shift();if(!c){if(streamDone&&onIdle){const f=onIdle;onIdle=null;f();}return;}
- playing=true;const fin=()=>{playing=false;playNext();};
+ if(c.gen!=null&&c.gen!==playGen)return playNext();
+ const gen=playGen;playing=true;const fin=()=>{if(gen!==playGen)return;playing=false;playNext();};
  if(!c.audio)return speakFallback(c.text,fin);
- player.onended=fin;player.onerror=fin;player.src=c.audio.startsWith('blob:')||c.audio.startsWith('data:')?c.audio:'data:audio/mpeg;base64,'+c.audio;setRate(c.rate||S.speed);player.play().then(()=>setState('speak','Speaking')).catch(()=>{player.onended=null;speakFallback(c.text,fin);});}
-function stopAudio(){q=[];playing=false;player.pause();if('speechSynthesis'in window)speechSynthesis.cancel();}
+ player.onended=fin;player.onerror=()=>{if(gen!==playGen)return;player.onended=null;speakFallback(c.text,fin);};
+ player.src=c.audio.startsWith('blob:')||c.audio.startsWith('data:')?c.audio:'data:audio/mpeg;base64,'+c.audio;setRate(c.rate||S.speed);
+ player.play().then(()=>{if(gen===playGen)setState('speak','Speaking');}).catch(()=>{if(gen!==playGen)return;player.onended=null;speakFallback(c.text,fin);});}
+function stopAudio(){playGen++;q=[];playing=false;player.pause();player.onended=null;player.onerror=null;if('speechSynthesis'in window)speechSynthesis.cancel();}
 const ttsCache=new Map();
 async function ttsUrl(text){const k=S.accent+'|'+text;if(ttsCache.has(k))return ttsCache.get(k);const r=await fetch('/api/tts',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text,accent:S.accent})});if(!r.ok)throw new Error('tts');const u=URL.createObjectURL(await r.blob());ttsCache.set(k,u);return u;}
-async function say(text,rate){stopAudio();unlock();let a=null;try{a=await ttsUrl(text);}catch{}streamDone=true;q.push({text,audio:a,rate:rate||S.speed});playNext();}
+async function say(text,rate){stopAudio();unlock();const gen=playGen;let a=null;try{a=await ttsUrl(text);}catch{}if(gen!==playGen)return;streamDone=true;q.push({text,audio:a,rate:rate||S.speed,gen});playNext();}
 
 /* ---------- recording ---------- */
 let stream,ac;
@@ -108,14 +122,14 @@ const openSheet=id=>$('#'+id).classList.add('on'),closeSheet=id=>$('#'+id).class
 $$('.sheet').forEach(s=>s.addEventListener('click',e=>{if(e.target===s)s.classList.remove('on');}));
 
 /* ---------- home ---------- */
-function refreshHome(){const d=days[today()]||{secs:0};const min=d.secs/60;$('#todayMin').textContent=Math.floor(min);$('#goalLbl').textContent=`/ ${S.goal} min aujourd'hui`;
+function refreshHome(){const d=days[today()]||{secs:0};const min=CoachLogic.practiceSecs(d)/60;$('#todayMin').textContent=Math.floor(min);$('#goalLbl').textContent=`/ ${S.goal} min de séance`;
  $('#ring').style.strokeDashoffset=628.3*(1-Math.min(1,min/S.goal));$('#streak').textContent=streak();$('#hDue').textContent=dueCards().length;
  $('#hWpm').textContent=d.secs>20?Math.round(d.words/(d.secs/60)):'–';$('#hLvl').textContent=lastLevel();
  const st=LS.get('flow',{})[today()]||0;['f1','f2','f3'].forEach((f,i)=>$('#'+f).classList.toggle('on',st>i));
  const note=$('#persistNote');if(note)note.textContent=thread.length?('Conversation de '+ME.name+' enregistrée sur cet appareil ('+thread.length+' message'+(thread.length>1?'s':'')+').'):'Les conversations restent sur cet appareil. Chaque profil est séparé.';}
 function flowMark(n){const f=LS.get('flow',{});f[today()]=Math.max(f[today()]||0,n);LS.set('flow',f);}
-$('#startSession').onclick=()=>{unlock();session=true;if(dueCards().length){show('review');startReview(true);}else{flowMark(1);openChat(false,null,{resume:true});}};
-$('#freeTalk').onclick=()=>{unlock();session=false;openChat(false,null,{resume:true});};
+$('#startSession').onclick=()=>{unlock();beginPractice();session=true;if(dueCards().length){show('review');startReview(true);}else{flowMark(1);openChat(false,null,{resume:true});}};
+$('#freeTalk').onclick=()=>{unlock();beginPractice();session=false;openChat(false,null,{resume:true});};
 $('#pressureBtn').onclick=()=>openSheet('sh-pressure');
 let session=false;
 
@@ -168,18 +182,18 @@ async function openChat(pressure,scenario,opts){opts=opts||{};mode={pressure:!!p
  if(opts.fresh){thread=[];saveThread();try{sessionStorage.removeItem(resumeKey());}catch(e){}await fetch('/api/reset?sid='+encodeURIComponent(sid),{method:'POST'}).catch(()=>{});hello();await beginGreeting({resume:false});return;}
  renderThread();
  let resumed=false;try{resumed=!!sessionStorage.getItem(resumeKey());}catch(e){}
- if(opts.resume&&thread.length&&!resumed){try{sessionStorage.setItem(resumeKey(),'1');}catch(e){}await beginGreeting({resume:true});}
+ if(opts.resume&&thread.length&&!resumed){try{sessionStorage.setItem(resumeKey(),'1');}catch(e){}if(CoachLogic.shouldContinueAloud(thread))await beginGreeting({resume:true});else setState('idle','À toi');}
  else if(opts.resume&&!thread.length)await beginGreeting({resume:false});
  else setState('idle',thread.length?'À toi':'Prêt');}
 function afterTeacher(){if(!mode.pressure)return setState('idle','À toi');
  let t=5;setState('idle',`À toi — ${t}`,true);clearInterval(pTimerId);pTimerId=setInterval(()=>{t--;if(mainRec)return clearInterval(pTimerId);if(t>0)setState('idle',`À toi — ${t}`,true);else{clearInterval(pTimerId);setState('idle','Réponds maintenant !',true);}},1000);}
 micBtn.onclick=async()=>{
  if(mainRec&&mainRec.on){clearInterval(pTimerId);$('#pTimer').textContent='';const r=mainRec;mainRec=null;drawIdle();sendTurn(await r.stop(),r.interrupted);return;}
- if(micBtn.classList.contains('busy'))return;
- try{mainRec=new Rec();await mainRec.start();}catch(e){mainRec=null;return bubble(e.message,'err');}
+ if(micBtn.classList.contains('busy')||(mainRec&&mainRec.starting))return;
+ try{turnGen++;stopAudio();beginPractice();mainRec=new Rec();mainRec.starting=true;await mainRec.start();mainRec.starting=false;}catch(e){mainRec=null;return bubble(e.message,'err');}
  setState('rec','Listening');draw(mainRec.an);
  if(mode.pressure){let t=+S.pSecs||45;$('#pTimer').textContent=t+'s';clearInterval(pTimerId);pTimerId=setInterval(()=>{t--;$('#pTimer').textContent=t+'s';if(t<=10)setState('rec',`Plus que ${t}s`,true);if(t<=0&&mainRec){mainRec.interrupted=true;micBtn.click();}},1000);}};
-async function sendTurn(rec,interrupted){setState('busy','Thinking');if(rec.blob.size<1500)return setState('idle','Trop court — réessaie');
+async function sendTurn(rec,interrupted){const my=++turnGen;setState('busy','Thinking');if(!rec||rec.blob.size<1500)return setState('idle','Trop court — réessaie');
  const doSearch=lookupOnce&&!mode.pressure;lookupOnce=false;syncLookup();
  const pending=bubble('…','me');let live=null,acc='',searchEl=null,searchSaved=null;stopAudio();streamDone=false;onIdle=afterTeacher;
  try{if(!mode.pressure)await syncContext();
@@ -187,12 +201,13 @@ async function sendTurn(rec,interrupted){setState('busy','Thinking');if(rec.blob
   if(!r.ok||!r.body)throw new Error('HTTP '+r.status);const rd=r.body.getReader(),dec=new TextDecoder();let buf='';
   while(true){const{value,done}=await rd.read();if(done)break;buf+=dec.decode(value,{stream:true});let i;
    while((i=buf.indexOf('\n\n'))>=0){const l=buf.slice(0,i);buf=buf.slice(i+2);if(!l.startsWith('data: '))continue;const ev=JSON.parse(l.slice(6));
-    if(ev.type==='user'){if(ev.text){pending.textContent=ev.text+(interrupted?'  ⏱':'');logSpeech(ev.text,rec.secs);if(!mode.pressure){thread=CoachLogic.appendMessage(thread,{role:'me',text:ev.text,at:Date.now()});saveThread();}}else pending.remove();}
+    if(my!==turnGen)return;
+    if(ev.type==='user'){if(ev.text){pending.textContent=ev.text+(interrupted?'  ⏱':'');logSpeech(ev.text,rec.secs);if(!mode.pressure&&!ev.unclear){thread=CoachLogic.appendMessage(thread,{role:'me',text:ev.text,at:Date.now()});saveThread();}}else pending.remove();}
     else if(ev.type==='search'){if(ev.state==='searching'){searchEl=paintSearch({reason:'searching'});setState('busy','Recherche…');}else{searchSaved={fresh:!!ev.fresh,reason:ev.reason||'',mode:ev.mode||'',sources:ev.sources||[]};if(searchEl)paintSearch(searchSaved,searchSaved.sources,searchEl);else searchEl=paintSearch(searchSaved);}}
     else if(ev.type==='delta'){acc+=ev.text;const v=acc.split('\n').filter(x=>!/^\s*(Tip\s*:|##)/i.test(x)).join('\n').trim();if(v){if(!live)live=bubble('','ai');live.textContent=v;log.scrollTop=1e9;}}
-    else if(ev.type==='audio'){q.push(ev);playNext();}
-    else if(ev.type==='reply'){if(live)live.remove();renderReply(ev.text,ev.meta);absorbMeta(ev.meta);
-     if(!mode.pressure&&ev.text){const item={role:'ai',text:ev.text,meta:CoachLogic.slimMeta(ev.meta),at:Date.now()};if(searchSaved){item.search=searchSaved;if(searchSaved.sources)item.sources=searchSaved.sources;}thread=CoachLogic.appendMessage(thread,item);saveThread();refreshHome();}}
+    else if(ev.type==='audio'){if(my!==turnGen)continue;q.push(Object.assign({gen:playGen},ev));playNext();}
+    else if(ev.type==='reply'){if(live)live.remove();renderReply(ev.text,ev.meta);if(!ev.text||!/didn't quite catch/i.test(ev.text))absorbMeta(ev.meta);
+     if(!mode.pressure&&ev.text&&!/didn't quite catch/i.test(ev.text)){const item={role:'ai',text:ev.text,meta:CoachLogic.slimMeta(ev.meta),at:Date.now()};if(searchSaved){item.search=searchSaved;if(searchSaved.sources)item.sources=searchSaved.sources;}thread=CoachLogic.appendMessage(thread,item);saveThread();refreshHome();}}
     else if(ev.type==='error')throw new Error(ev.error);
     else if(ev.type==='done'){streamDone=true;if(!playing&&!q.length){const f=onIdle;onIdle=null;f&&f();}}}}
  }catch(e){if(pending.textContent==='…')pending.remove();if(searchEl&&!searchSaved)paintSearch({fresh:false,reason:'error'},null,searchEl);bubble('Erreur : '+e.message,'err');setState('idle','Prêt');}}
@@ -201,7 +216,7 @@ $('#bilanBtn').onclick=async()=>{setState('busy','Bilan…');stopAudio();const d
  try{if(!mode.pressure)await syncContext();const r=await fetch('/api/recap',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({sid,ctx:{profile:PROF||'tom'},stats:{minutesToday:Math.round((d.secs||0)/60),wordsToday:d.words,errorsToday:d.errors,streak:streak()}})});const j=await r.json();if(!r.ok)throw new Error(j.error);
   const el=document.createElement('div');el.className='recap';el.innerHTML='<b>Bilan de session</b>';el.append(j.recap);log.appendChild(el);log.scrollTop=1e9;flowMark(3);}catch(e){bubble('Erreur : '+e.message,'err');}setState('idle','Prêt');};
 $('#pQuit').onclick=()=>{clearInterval(pTimerId);stopAudio();mode={pressure:false};$('#pBanner').hidden=true;const lookup=$('#lookupBtn');if(lookup)lookup.hidden=false;renderThread();show('home');};
-$$('#sh-pressure [data-sc]').forEach(b=>b.onclick=()=>{unlock();closeSheet('sh-pressure');openChat(true,b.dataset.sc);});
+$$('#sh-pressure [data-sc]').forEach(b=>b.onclick=()=>{unlock();beginPractice();closeSheet('sh-pressure');openChat(true,b.dataset.sc);});
 const pS=$('#pSecs');pS.value=S.pSecs||45;$('#pSecsV').textContent=pS.value+' s';pS.oninput=()=>{S.pSecs=+pS.value;saveS();$('#pSecsV').textContent=pS.value+' s';};$('#pClose').onclick=()=>closeSheet('sh-pressure');
 
 /* ---------- shadowing ---------- */
@@ -221,7 +236,7 @@ $('#shMic').onclick=async()=>{const m=$('#shMic');
    const c=cards.find(x=>x.en===shTarget);if(c&&pct>=90&&c.reps===0)schedule(c,4);}
   catch(e){$('#shResult').innerHTML=`<p class="msg err">${esc(e.message)}</p>`;}
   m.className='mic smallmic';return;}
- try{stopAudio();shRec=new Rec();await shRec.start();m.className='mic smallmic rec';$('#shState').textContent='Je t\'écoute… appuie pour finir';}catch(e){shRec=null;$('#shResult').innerHTML=`<p class="msg err">${esc(e.message)}</p>`;}};
+ try{beginPractice();stopAudio();shRec=new Rec();await shRec.start();m.className='mic smallmic rec';$('#shState').textContent='Je t\'écoute… appuie pour finir';}catch(e){shRec=null;$('#shResult').innerHTML=`<p class="msg err">${esc(e.message)}</p>`;}};
 async function pronScore(rec,ref){try{const wav=await toWav16k(rec.blob);const r=await fetch('/api/pron?ref='+encodeURIComponent(ref),{method:'POST',headers:{'Content-Type':'audio/wav'},body:wav});const j=await r.json();return j.enabled&&!j.error?j:null;}catch(e){console.warn(e);return null;}}
 
 /* ---------- oral review ---------- */
@@ -243,7 +258,7 @@ $('#rMic').onclick=async()=>{const m=$('#rMic');
    say(target);$('#rNext').hidden=false;$('#rState').textContent='';}
   catch(e){$('#rResult').innerHTML=`<p class="msg err">${esc(e.message)}</p>`;}
   m.className='mic smallmic';return;}
- try{rv.rec=new Rec();await rv.rec.start();m.className='mic smallmic rec';$('#rState').textContent='Je t\'écoute… appuie pour valider';}catch(e){rv.rec=null;$('#rResult').innerHTML=`<p class="msg err">${esc(e.message)}</p>`;}};
+ try{beginPractice();rv.rec=new Rec();await rv.rec.start();m.className='mic smallmic rec';$('#rState').textContent='Je t\'écoute… appuie pour valider';}catch(e){rv.rec=null;$('#rResult').innerHTML=`<p class="msg err">${esc(e.message)}</p>`;}};
 $('#rNext').onclick=()=>{rv.i++;if(rv.i>=rv.list.length||Date.now()>rv.end)finishReview();else showCard();};
 $('#rToChat').onclick=()=>{clearInterval(rv.timer);rv.active=false;flowMark(1);openChat(false,null,{resume:true});};
 
@@ -254,11 +269,11 @@ function line(svg,vals,color,minY,maxY){const W=300,H=110,pts=vals.map((v,i)=>v=
  if(!pts.length){svg.innerHTML=`<text x="150" y="60" text-anchor="middle" fill="var(--mute)" font-size="12">Pas encore de données</text>`;return;}
  svg.innerHTML=`<polyline fill="none" stroke="${color}" stroke-width="3" stroke-linejoin="round" stroke-linecap="round" points="${pts.map(p=>p.join(',')).join(' ')}"/>`+pts.map(p=>`<circle cx="${p[0]}" cy="${p[1]}" r="3.5" fill="${color}"/>`).join('');}
 const LV=['A1','A2','B1','B2','C1','C2'];
-function renderStats(){const d14=lastDays(14);const min=d14.map(([,d])=>Math.round(d.secs/60));bars($('#cMin'),min,'var(--accent)');
+function renderStats(){const d14=lastDays(14);const min=d14.map(([,d])=>Math.round(CoachLogic.practiceSecs(d)/60));bars($('#cMin'),min,'var(--accent)');
  $('#lMin').innerHTML=`<span>${d14[0][0].slice(5)}</span><span>aujourd'hui</span>`;
  line($('#cWpm'),d14.map(([,d])=>d.secs>20?Math.round(d.words/(d.secs/60)):null),'var(--good)',0,Math.max(60,...d14.map(([,d])=>d.secs>20?d.words/(d.secs/60):0)));
  line($('#cErr'),d14.map(([,d])=>d.words>10?+(d.errors/d.words*100).toFixed(1):null),'var(--rec)',0,Math.max(5,...d14.map(([,d])=>d.words>10?d.errors/d.words*100:0)));
- $('#sMin').textContent=lastDays(7).reduce((a,[,d])=>a+d.secs,0)/60|0;$('#sStreak').textContent=streak();$('#sCards').textContent=cards.length;$('#sVocab').textContent=vocab.size;
+ $('#sMin').textContent=lastDays(7).reduce((a,[,d])=>a+CoachLogic.practiceSecs(d),0)/60|0;$('#sStreak').textContent=streak();$('#sCards').textContent=cards.length;$('#sVocab').textContent=vocab.size;
  const w7=lastDays(7),tot=w7.reduce((a,[,d])=>a+d.words,0),u=new Set(w7.flatMap(([,d])=>d.uniq||[]));$('#sTtr').textContent=tot>30?Math.round(u.size/tot*100)+'%':'–';
  const wk={};levels.forEach(x=>{const dt=new Date(x.d);dt.setDate(dt.getDate()-((dt.getDay()+6)%7));const k=today(dt);(wk[k]=wk[k]||[]).push(LV.indexOf(x.l));});
  const ks=Object.keys(wk).sort().slice(-8),vals=ks.map(k=>{const a=wk[k].sort((x,y)=>x-y);return a[a.length>>1];});
@@ -279,7 +294,7 @@ $('#icsBtn').onclick=e=>{e.preventDefault();const ics=['BEGIN:VCALENDAR','VERSIO
  const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([ics],{type:'text/calendar'}));a.download='english-coach.ics';a.click();};
 
 function paintProfiles(){const stats=CoachLogic.profileStats(CoachLogic.snapshot(localStorage));stats.forEach(s=>{const el=document.querySelector('[data-p="'+s.id+'"] .pdata');if(el)el.textContent=s.hasData?(s.cards+' carte'+(s.cards>1?'s':'')+' · '+s.minutes+' min'+(s.messages?' · '+s.messages+' msg':'')):'Pas encore de données ici';});
- const hint=$('#transferHint');if(!hint)return;const any=stats.some(s=>s.hasData);hint.hidden=any;if(!any)hint.textContent='Aucun progrès dans ce raccourci. Si l’ancien raccourci a encore tes données, ne le supprime pas. Quand il affiche la version 9, exporte la copie et importe-la ici.';}
+ const hint=$('#transferHint');if(!hint)return;const any=stats.some(s=>s.hasData);hint.hidden=any;if(!any)hint.textContent='Aucun progrès dans ce raccourci. Si l’ancien raccourci a encore tes données, ne le supprime pas. Quand il affiche la version '+CoachLogic.APP_VERSION+', exporte la copie et importe-la ici.';}
 function downloadJson(name,obj){const blob=new Blob([JSON.stringify(obj)],{type:'application/json'});const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(a.href),2000);}
 async function shareOrDownload(name,obj){const blob=new Blob([JSON.stringify(obj)],{type:'application/json'});const file=new File([blob],name,{type:'application/json'});
  if(navigator.share&&navigator.canShare&&navigator.canShare({files:[file]})){try{await navigator.share({files:[file],title:'English Coach'});return;}catch(e){if(e&&e.name==='AbortError')return;}}
@@ -307,7 +322,9 @@ const buildInfo=$('#buildInfo');if(buildInfo)buildInfo.textContent='Version '+Co
 $('#meBtn').textContent=ME.ini;$('#meBtn').className='av '+(PROF||'tom');$('#meBtn').onclick=switchProfile;
 $$('#profiles [data-p]').forEach(b=>b.onclick=()=>pickProfile(b.dataset.p));
 $('#profiles').hidden=!!PROF;
+syncClock(document.visibilityState!=='hidden');
 paintProfiles();
+const sessionCtl=$('#sessionCtl');if(sessionCtl)sessionCtl.onclick=()=>{if(clock&&clock.active)pausePractice();else beginPractice();};
 syncSettings();syncLookup();refreshHome();renderThread();
 if(location.hash.startsWith('#demo')&&location.hash!=='#demo-profiles'){document.head.insertAdjacentHTML('beforeend','<style>*{animation-duration:0s!important;animation-delay:0s!important;transition:none!important}</style>');
  const v=location.hash.slice(6).split('@')[0]||'home';const t0=new Date();
