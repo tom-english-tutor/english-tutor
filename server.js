@@ -8,9 +8,9 @@ const OKEY=E.OPENAI_API_KEY,TTS_MODEL=E.TTS_MODEL||'gpt-4o-mini-tts',STT_MODEL=E
 const AZ_KEY=E.AZURE_SPEECH_KEY,AZ_REGION=E.AZURE_SPEECH_REGION;
 const SYS=fs.readFileSync(path.join(__dirname,'prompt.md'),'utf8');
 const ACCENTS={
- us:{voice:E.VOICE_US||E.VOICE||'marin',accent:'a natural General American accent',spelling:'American'},
- uk:{voice:E.VOICE_UK||'fable',accent:'a natural Southern British (London) accent',spelling:'British'},
- au:{voice:E.VOICE_AU||'sage',accent:'a natural, relaxed Australian accent',spelling:'Australian/British'}};
+ us:{voice:E.VOICE_US||E.VOICE||'marin',accent:'a natural General American accent',spelling:'American',persona:'Sam, 29, from Portland, Oregon, now in Lyon for a product job at a small startup. Climbs, cooks badly, reads too much news, dry sense of humour, says what he thinks'},
+ uk:{voice:E.VOICE_UK||'fable',accent:'a natural Southern British (London) accent',spelling:'British',persona:'Alex, 30, from Bristol, lives in London, works in marketing for a cycling brand. Runs, likes pubs more than gyms, quick to tease, honest about mistakes'},
+ au:{voice:E.VOICE_AU||'sage',accent:'a natural, relaxed Australian accent',spelling:'Australian/British',persona:'Jess, 28, from Melbourne, freelance videographer who travels a lot. Surfs, drinks too much coffee, relaxed, blunt, laughs easily'}};
 const acc=a=>ACCENTS[a]||ACCENTS.us;
 const voiceInstr=a=>logic.voiceInstructions(acc(a).accent);
 const PRESSURE={
@@ -29,7 +29,7 @@ async function tts(text,accent){
   if(!OKEY)throw new Error('OPENAI_API_KEY manquante');
   const input=logic.forSpeech(text).slice(0,4000);if(!input)throw new Error('rien à lire');
   const voice=acc(accent).voice;
-  const p=logic.speechRequest({text:input,model:TTS_MODEL,voice,accentPhrase:acc(accent).accent});
+  const p=logic.speechRequest({text:input,model:TTS_MODEL,voice,accentPhrase:acc(accent).accent,persona:acc(accent).persona});
   const r=await fetch('https://api.openai.com/v1/audio/speech',{method:'POST',headers:{Authorization:'Bearer '+OKEY,'Content-Type':'application/json'},body:JSON.stringify(p)});
   if(!r.ok)throw new Error('TTS '+r.status+': '+(await r.text()).slice(0,200));
   return Buffer.from(await r.arrayBuffer());
@@ -60,11 +60,11 @@ const PROFILES={
  sophie:{name:'Sophie',g:'f',profile:'Sophie is a French native speaker learning English. You have no biography for her yet — do NOT assume her job, studies, city, hobbies, family, or level, and do NOT borrow facts from any other learner. Discovery first: ask what she enjoys and why she wants English, then continue from her answers. Her level is UNKNOWN: start with clear, simple English, adapt from what you hear, and report the estimate in the JSON "level".',pitch:'whatever she wants to talk about (ask her first, in character)'}};
 const UNKNOWN={name:'Learner',g:'m',profile:'This request did not name a known learner. Do not invent a job, city, or family, and do not reuse another learner\'s biography.',pitch:'something they care about (ask first)'};
 const prof=c=>{const id=c&&c.profile;if(id==null||id==='')return PROFILES.tom;return PROFILES[id]||UNKNOWN;};
-function personal(t,c){const p=prof(c);t=t.split('{{PROFILE}}').join(p.profile).split('{{NAME}}').join(p.name).split('{{PITCH}}').join(p.pitch).split('{{GENDER_FR}}').join(p.g==='f'?'féminin : elle est une femme (ex. « tu es prête », « tu es allée »)':'masculin (ex. « tu es prêt », « tu es allé »)');
+function personal(t,c){const p=prof(c);const who=c&&c.mode==='pressure'?'a precise native speaker who will play the role described below':acc(c&&c.accent).persona;t=t.split('{{PERSONA}}').join(who).split('{{PROFILE}}').join(p.profile).split('{{NAME}}').join(p.name).split('{{PITCH}}').join(p.pitch).split('{{GENDER_FR}}').join(p.g==='f'?'féminin : elle est une femme (ex. « tu es prête », « tu es allée »)':'masculin (ex. « tu es prêt », « tu es allé »)');
  if(p.g==='f')t=t.replace(/\bhe\b/g,'she').replace(/\bHe\b/g,'She').replace(/\bhim\b/g,'her').replace(/\bhis\b/g,'her').replace(/\bHis\b/g,'Her').replace(/\bhimself\b/g,'herself');return t;}
 function sysFor(ctx){
   const c=ctx||{};
-  let x=SYS+logic.sessionAddendum(Object.assign({}, c, {spelling:acc(c.accent).spelling,journal:c.journal}));
+  let x=SYS+logic.sessionAddendum(Object.assign({}, c, {spelling:acc(c.accent).spelling,persona:c.mode==='pressure'?'':acc(c.accent).persona,journal:c.journal}));
   if(c.mode==='pressure'){
     x+=`\n\n# MODE PRESSION (performance-anxiety training) — ACTIVE
 You are now ${PRESSURE[c.scenario]||PRESSURE.interview}. Stay fully in character.
@@ -160,12 +160,14 @@ function createApp(){return http.createServer(async(req,res)=>{try{
   if(ctx.interrupted)userText+='\n['+prof(ctx).name+' ran out of time — '+(prof(ctx).g==='f'?'her':'his')+' answer was cut off by the timer.]';if(ctx.secs)userText+=`\n[spoke ${Math.round(ctx.secs)}s]`;
   ctx.journal=journalFor(sid,ctx,t.text);
   const filter=logic.createSpokenSanitizer();
-  let spokenRaw='';
-  const emitDelta=piece=>{if(!piece)return;spokenRaw+=piece;send({type:'delta',text:piece});};
+  let spokenRaw='',early=null,earlyHead='';
+  const emitDelta=piece=>{if(!piece)return;spokenRaw+=piece;send({type:'delta',text:piece});
+    if(!early){const head=logic.earlyClip(spokenRaw);if(head){earlyHead=head;early=tts(head,ctx.accent).catch(()=>null);}}};
   try{let first=true;for await(const d of claudeStream(sid,userText,ctx)){if(first){tm.firstToken=Date.now()-T0;first=false;}emitDelta(filter.push(d));}
     emitDelta(filter.end());tm.claudeDone=Date.now()-T0;const cleaned=logic.cleanCoachText(spokenRaw);const{text,meta}=splitMeta(cleaned);send({type:'reply',text,meta,search:searchInfo});
-    const plan=logic.speechPlan(logic.spokenAloud(cleaned));const voice=acc(ctx.accent).voice;
-    for(let i=0;i<plan.length;i++){try{const b64=(await tts(plan[i],ctx.accent)).toString('base64');if(i===0)tm.firstAudio=Date.now()-T0;send({type:'audio',i,text:plan[i],audio:b64,voice,model:TTS_MODEL});}catch(e){console.error(e.message);send({type:'audio',i,text:plan[i],audio:null,error:'voice'});}}
+    const aloud=logic.spokenAloud(cleaned);const plan=logic.orderedClips(aloud,early?earlyHead:'');if(!plan.length||plan[0]!==earlyHead)early=null;
+    const rest=plan.slice(1).map(part=>tts(part,ctx.accent).catch(()=>null));const voice=acc(ctx.accent).voice;
+    for(let i=0;i<plan.length;i++){try{let buf=i===0&&early?await early:null;if(!buf)buf=i===0?await tts(plan[0],ctx.accent):await rest[i-1];if(!buf)throw new Error('voix vide');if(i===0)tm.firstAudio=Date.now()-T0;send({type:'audio',i,text:plan[i],audio:buf.toString('base64'),voice,model:TTS_MODEL});}catch(e){console.error(e.message);send({type:'audio',i,text:plan[i],audio:null,error:'voice'});}}
     tm.total=Date.now()-T0;send({type:'done',timings:tm});console.log('timings',JSON.stringify(tm));}
   catch(e){send({type:'error',error:e.message});}
   return res.end();

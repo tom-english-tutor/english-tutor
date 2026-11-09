@@ -98,7 +98,8 @@ test('the page never falls back to the browser voice', () => {
   const server = fs.readFileSync(path.join(__dirname, '../server.js'), 'utf8');
   assert.doesNotMatch(app, /speechSynthesis/);
   assert.match(app, /Réessayer la voix/);
-  assert.match(server, /speechPlan/);
+  assert.match(server, /earlyClip/);
+  assert.match(server, /orderedClips/);
   assert.doesNotMatch(server, /createPhraseGrouper/);
 });
 

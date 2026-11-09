@@ -298,7 +298,7 @@ test('health and context routes keep two profiles apart and do not enable billed
   const port = app.address().port;
   try {
     const health = await (await fetch('http://127.0.0.1:' + port + '/api/health')).json();
-    assert.equal(health.version, 12);
+    assert.equal(health.version, 13);
     assert.equal(health.ttsInstructions, true);
     assert.equal(health.voices.us, 'marin');
     assert.deepEqual(health.profiles, ['tom', 'chloe', 'sophie']);
