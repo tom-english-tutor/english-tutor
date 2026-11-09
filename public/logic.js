@@ -168,6 +168,7 @@
     const c = ctx || {};
     const spelling = String(c.spelling || 'American').slice(0, 40);
     let x = '\n\n# Session settings\nAccent/spelling: ' + spelling + ' English — use its natural vocabulary and idioms.';
+    if (c.persona && c.mode !== 'pressure') x += '\nYou are ' + cleanExcerpt(c.persona).slice(0, 220) + '. Stay this one person for the whole conversation. Do not invent facts about the learner, and do not record your own life as a fact about them.';
     const due = (Array.isArray(c.due) ? c.due : []).slice(0, 6).map(s => cleanExcerpt(s).slice(0, 200)).filter(Boolean);
     const recent = (Array.isArray(c.recent) ? c.recent : []).slice(0, 10).map(s => cleanExcerpt(s).slice(0, 120)).filter(Boolean);
     if (due.length) x += '\n\n# Spaced-repetition items DUE today — weave 1 of them naturally into this turn when it fits (create a situation where {{NAME}} needs it; don\'t quiz):\n- ' + due.join('\n- ');
@@ -289,7 +290,7 @@
   }
 
   const LEGACY_KEYS = ['settings', 'sid', 'days', 'vocab', 'levels', 'cards', 'flow', 'demoSeeded'];
-  const APP_VERSION = 12;
+  const APP_VERSION = 13;
   const ARCHIVE_CAP = 500;
   const SESSION_MAX_GAP_MS = 90000;
   const SKIP_ON_IMPORT = { profile: 1 };
@@ -627,19 +628,51 @@
     return forSpeech(cleanCoachText(text));
   }
 
+  const FIRST_CHUNK_MIN = 160;
+
+  function firstSentence(text) {
+    const t = String(text || '').trim();
+    const m = t.match(/^(.*?[.!?]["”’)]?)(\s+)(\S[\s\S]*)$/);
+    if (!m) return null;
+    if (m[1].length < 25 || m[3].length < 40) return null;
+    return { head: m[1], tail: m[3] };
+  }
+
   function speechPlan(text) {
-    const input = forSpeech(text);
+    const input = forSpeech(spokenAloud(text));
     if (!input) return [];
-    if (input.length <= 700) return [input];
-    const sentences = input.split(/(?<=[.!?])\s+/).filter(Boolean);
-    const out = [];
-    let buf = '';
-    for (const s of sentences) {
-      if (buf && (buf + ' ' + s).length > 500) { out.push(buf); buf = s; }
-      else buf = buf ? buf + ' ' + s : s;
+    if (input.length < FIRST_CHUNK_MIN) return [input];
+    const found = firstSentence(input);
+    return found ? [found.head, found.tail] : [input];
+  }
+
+  function earlyClip(text) {
+    const spoken = forSpeech(text);
+    if (spoken.length < FIRST_CHUNK_MIN) return '';
+    const found = firstSentence(spoken);
+    return found ? forSpeech(found.head) : '';
+  }
+
+  function orderedClips(aloud, earlyHead) {
+    const full = forSpeech(spokenAloud(aloud));
+    if (!full) return [];
+    const head = forSpeech(earlyHead || '');
+    if (head && (full === head || full.startsWith(head + ' '))) {
+      const rest = full.slice(head.length).trim();
+      return rest ? [head, rest] : [head];
     }
-    if (buf) out.push(buf);
-    return out.length ? out : [input];
+    return speechPlan(full);
+  }
+
+  function learnerNotes(notes) {
+    const list = Array.isArray(notes) ? notes : [];
+    return list.filter(note => {
+      const text = String(typeof note === 'string' ? note : (note && note.text) || '').replace(/\s+/g, ' ').trim();
+      if (!text) return false;
+      if (/^(sam|alex|jess)\b/i.test(text)) return false;
+      if (/\b(sam|alex|jess)\b/i.test(text) && /\b(portland|bristol|melbourne|videographer|cycling brand|climbs|surfs)\b/i.test(text)) return false;
+      return true;
+    });
   }
 
   function asksAboutPast(text) {
@@ -775,15 +808,16 @@
     const model = o.model || 'gpt-4o-mini-tts';
     const text = forSpeech(o.text).slice(0, 4000);
     const body = { model, voice: o.voice || 'marin', input: text, response_format: 'mp3' };
-    if (String(model).indexOf('gpt-4o') >= 0) body.instructions = voiceInstructions(o.accentPhrase || 'a natural General American accent');
+    if (String(model).indexOf('gpt-4o') >= 0) body.instructions = voiceInstructions(o.accentPhrase || 'a natural General American accent', o.persona);
     return body;
   }
 
-  function voiceInstructions(accentPhrase) {
-    return 'Voice: the same adult friend in their late twenties, ' + accentPhrase + ', one person from the first word to the last.\n' +
-      'Same timbre, same pitch, and the same calm pace on every sentence. A question only lifts slightly on its last few words. Do not switch to a brighter, higher, or announcer-like voice for a question.\n' +
-      'Speak the whole passage as one continuous turn in a quiet room. Short breaths between sentences. Contractions. Not a narrator, teacher, announcer, or a second character.\n' +
-      'Energy stays even and interested, not a cheerleader. No laugh, no whisper, no theatrical drop. Do not sound impressed.';
+  function voiceInstructions(accentPhrase, persona) {
+    const who = persona ? String(persona).replace(/\s+/g, ' ').trim().slice(0, 180) : 'an adult friend in their late twenties';
+    return 'Voice: ' + who + ', ' + accentPhrase + ', one person from the first word to the last.\n' +
+      'Same timbre and the same voice on every sentence, including a question. Rhythm is human: slightly faster on an easy thought, a beat slower on the word that matters, a tiny hesitation is allowed. A question lifts a little at the end, nothing more.\n' +
+      'One continuous turn in a quiet room, not a new recording for each sentence. Contractions. A little warmth when something is funny, drier when it is ironic, plain when it is ordinary.\n' +
+      'Not a narrator, not a teacher, not an announcer, not a cheerleader, not a second character. No laugh, no whisper, no theatrical drop. Do not sound impressed.';
   }
 
   function unclearSpeech(text) {
@@ -849,7 +883,7 @@
     profileId, storageKey, wipe, safeHttpUrl, cleanExcerpt, slimMeta,
     recoverLegacy, snapshot, parseTransfer, planImport, applyImport, profileStats,
     recentQuestions, shouldContinueAloud, replyOpenings, unclearSpeech, createPhraseGrouper,
-    parisDate, parisYesterday, combineHistory, splitHistory, datedModelMessages, memoryBrief, memoryStatus, memoryLog, normalizeMemoryLog, renderMemoryLog, withholdJournal, asksAboutPast, speechRequest, speechPlan, ARCHIVE_CAP,
+    parisDate, parisYesterday, combineHistory, splitHistory, datedModelMessages, memoryBrief, memoryStatus, memoryLog, normalizeMemoryLog, renderMemoryLog, withholdJournal, asksAboutPast, speechRequest, speechPlan, earlyClip, orderedClips, firstSentence, learnerNotes, FIRST_CHUNK_MIN, ARCHIVE_CAP,
     stripMetadataTokens, createSpokenSanitizer, cleanCoachText, forSpeech, spokenAloud, limitQuestions,
     tickSession, startSession, pauseSession, noteSessionSecs, practiceSecs, SESSION_MAX_GAP_MS,
     normalizeThread, appendMessage, toModelMessages, conversationForApi,

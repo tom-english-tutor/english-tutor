@@ -162,7 +162,7 @@ function renderReply(text,meta){const h=$('.hello',log);if(h)h.remove();const ti
  log.scrollTop=1e9;}
 function absorbMeta(meta){if(!meta)return;(meta.mistakes||[]).forEach(m=>m&&m.right&&addCard({type:'fix',en:m.right,wrong:m.wrong||'',fr:m.fr||''}));
  (meta.expressions||[]).forEach(e=>e&&e.en&&addCard({type:'expr',en:e.en,fr:e.fr||'',example:e.example||''}));
- if(Array.isArray(meta.notes)&&meta.notes.length){memory=CoachLogic.mergeMemory(memory,meta.notes);saveMemory();}
+ if(Array.isArray(meta.notes)&&meta.notes.length){memory=CoachLogic.mergeMemory(memory,CoachLogic.learnerNotes(meta.notes));saveMemory();}
  if(!mode.pressure||true)logErrors((meta.mistakes||[]).length);logLevel(meta.level);}
 function draw(an){const W=cv.width,H=cv.height,d=new Uint8Array(an.frequencyBinCount);an.getByteTimeDomainData(d);let s=0;for(const v of d){const x=(v-128)/128;s+=x*x}const lvl=Math.min(1,Math.sqrt(s/d.length)*4);
  cx.clearRect(0,0,W,H);const N=72,R=W*0.33;for(let i=0;i<N;i++){const a=i/N*Math.PI*2,v=(d[(i*7)%d.length]-128)/128,len=6+Math.abs(v)*W*.12*lvl+lvl*20;
@@ -202,7 +202,7 @@ micBtn.onclick=async()=>{
  if(mode.pressure){let t=+S.pSecs||45;$('#pTimer').textContent=t+'s';clearInterval(pTimerId);pTimerId=setInterval(()=>{t--;$('#pTimer').textContent=t+'s';if(t<=10)setState('rec',`Plus que ${t}s`,true);if(t<=0&&mainRec){mainRec.interrupted=true;micBtn.click();}},1000);}};
 async function sendTurn(rec,interrupted){const my=++turnGen;setState('busy','Thinking');if(!rec||rec.blob.size<1500)return setState('idle','Trop court — réessaie');
  const doSearch=lookupOnce&&!mode.pressure;lookupOnce=false;syncLookup();
- const pending=bubble('…','me');let live=null,acc='',searchEl=null,searchSaved=null;const speakFilter=CoachLogic.createSpokenSanitizer();stopAudio();streamDone=false;onIdle=afterTeacher;
+ const pending=bubble('…','me');let live=null,acc='',searchEl=null,searchSaved=null;const speakFilter=CoachLogic.createSpokenSanitizer();const audioHold=new Map();let nextAudio=0;stopAudio();streamDone=false;onIdle=afterTeacher;
  try{if(!mode.pressure)await syncContext();
   const r=await fetch('/api/stream?sid='+encodeURIComponent(sid),{method:'POST',headers:{'Content-Type':rec.type,'X-Ctx':b64(ctx({secs:rec.secs,interrupted:!!interrupted,search:doSearch,...(mode.pressure?{mode:'pressure',scenario:mode.scenario}:{})}))},body:rec.blob});
   if(!r.ok||!r.body)throw new Error('HTTP '+r.status);const rd=r.body.getReader(),dec=new TextDecoder();let buf='';
@@ -212,7 +212,7 @@ async function sendTurn(rec,interrupted){const my=++turnGen;setState('busy','Thi
     if(ev.type==='user'){if(ev.text){pending.textContent=ev.text+(interrupted?'  ⏱':'');logSpeech(ev.text,rec.secs);if(!mode.pressure&&!ev.unclear)remember({role:'me',text:ev.text,at:Date.now()});}else pending.remove();}
     else if(ev.type==='search'){if(ev.state==='searching'){searchEl=paintSearch({reason:'searching'});setState('busy','Recherche…');}else{searchSaved={fresh:!!ev.fresh,reason:ev.reason||'',mode:ev.mode||'',sources:ev.sources||[]};if(searchEl)paintSearch(searchSaved,searchSaved.sources,searchEl);else searchEl=paintSearch(searchSaved);}}
     else if(ev.type==='delta'){acc+=speakFilter.push(ev.text||'');const v=acc.split('\n').filter(x=>!/^\s*(Tip\s*:|##)/i.test(x)).join('\n').trim();if(v){if(!live)live=bubble('','ai');live.textContent=v;log.scrollTop=1e9;}}
-    else if(ev.type==='audio'){if(my!==turnGen)continue;const said=CoachLogic.forSpeech(ev.text||'');if(!ev.audio){voiceRetry(said);continue;}q.push(Object.assign({gen:playGen},ev,{text:said}));playNext();}
+    else if(ev.type==='audio'){if(my!==turnGen)continue;const idx=Number.isInteger(ev.i)?ev.i:nextAudio;audioHold.set(idx,ev);while(audioHold.has(nextAudio)){const item=audioHold.get(nextAudio);audioHold.delete(nextAudio);nextAudio++;const said=CoachLogic.forSpeech(item.text||'');if(!item.audio){voiceRetry(said);continue;}q.push(Object.assign({gen:playGen},item,{text:said}));playNext();}}
     else if(ev.type==='reply'){speakFilter.end();const reply=CoachLogic.cleanCoachText(ev.text||'');if(live)live.remove();renderReply(reply,ev.meta);if(!reply||!/didn't quite catch/i.test(reply))absorbMeta(ev.meta);
      if(!mode.pressure&&reply&&!/didn't quite catch/i.test(reply)){const item={role:'ai',text:reply,meta:CoachLogic.slimMeta(ev.meta),at:Date.now()};if(searchSaved){item.search=searchSaved;if(searchSaved.sources)item.sources=searchSaved.sources;}remember(item);refreshHome();}}
     else if(ev.type==='error')throw new Error(ev.error);
